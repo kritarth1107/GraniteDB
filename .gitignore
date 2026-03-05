@@ -1,1 +1,21 @@
-/target
+# Build
+/target/
+Cargo.lock
+
+# Data
+/data/
+*.gdb
+*.wal
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
