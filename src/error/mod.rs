@@ -127,6 +127,31 @@ pub enum GraniteError {
     #[error("Decryption error: {0}")]
     DecryptionError(String),
 
+    // ── Vector / AI Errors ───────────────────────────────────────────
+    #[error("Invalid vector: {0}")]
+    InvalidVector(String),
+
+    #[error("Vector dimension mismatch: expected {expected}, got {actual}")]
+    VectorDimensionMismatch { expected: usize, actual: usize },
+
+    #[error("Embedding error: {0}")]
+    EmbeddingError(String),
+
+    #[error("Inference error: {0}")]
+    InferenceError(String),
+
+    // ── Search Errors ───────────────────────────────────────────────
+    #[error("Search error: {0}")]
+    SearchError(String),
+
+    // ── Geospatial Errors ───────────────────────────────────────────
+    #[error("Invalid coordinates: {0}")]
+    InvalidCoordinates(String),
+
+    // ── Compression Errors ──────────────────────────────────────────
+    #[error("Compression error: {0}")]
+    CompressionError(String),
+
     // ── Generic ──────────────────────────────────────────────────────
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
