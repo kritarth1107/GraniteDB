@@ -134,4 +134,6 @@ Full write-up: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE).
+The [LICENSE](LICENSE) file in this repository is the source of truth for
+the terms that apply to GraniteDB. It is not the official Apache-2.0 SPDX
+text.
