@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test
+        run: cargo test --all-targets --all-features
+
+  build:
+    name: build (${{ matrix.os }})
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release binaries
+        run: cargo build --release --bins
+      - name: Stage artifacts
+        run: |
+          set -euo pipefail
+          HOST=$(rustc -vV | awk '/^host:/ { print $2 }')
+          VERSION="${GITHUB_REF_NAME}"
+          STAGE="dist/${VERSION}-${HOST}"
+          mkdir -p "${STAGE}"
+          cp target/release/granitedb "${STAGE}/granitedb"
+          cp target/release/granite-cli "${STAGE}/granite-cli"
+          tar -C dist -czf "granitedb-${VERSION}-${HOST}.tar.gz" "${VERSION}-${HOST}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bins-${{ matrix.os }}
+          path: granitedb-*.tar.gz
+
+  publish:
+    name: github-release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: ${{ contains(github.ref_name, '-beta') }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: artifacts/**
+          body: |
+            This is a **beta** pre-release of GraniteDB.
+
+            The tree-memory engine is under active development and is **not production-grade** yet.
+            Do not use it as the system of record for data you cannot rebuild.
+
+            See [docs/ARCHITECTURE.md](https://github.com/kritarth1107/GraniteDB/blob/master/docs/ARCHITECTURE.md) for the design and 15-day roadmap.
