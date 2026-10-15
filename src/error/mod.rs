@@ -20,7 +20,9 @@ pub enum GraniteError {
     #[error("WAL error: {0}")]
     Wal(String),
 
-    #[error("Page corrupted: page_id={page_id}, expected_crc={expected_crc}, actual_crc={actual_crc}")]
+    #[error(
+        "Page corrupted: page_id={page_id}, expected_crc={expected_crc}, actual_crc={actual_crc}"
+    )]
     PageCorruption {
         page_id: u64,
         expected_crc: u32,
@@ -126,6 +128,34 @@ pub enum GraniteError {
 
     #[error("Decryption error: {0}")]
     DecryptionError(String),
+
+    // ── Memory tree ──────────────────────────────────────────────────
+    #[error("memory node not found: {0}")]
+    NodeNotFound(crate::memory::NodeId),
+
+    #[error("node {parent} already has a child named '{name}'")]
+    DuplicateChildName {
+        parent: crate::memory::NodeId,
+        name: String,
+    },
+
+    #[error("cannot move node {0} into its own subtree")]
+    CycleDetected(crate::memory::NodeId),
+
+    #[error("cannot delete the root node")]
+    CannotDeleteRoot,
+
+    #[error("cannot move the root node")]
+    CannotMoveRoot,
+
+    #[error("cannot rename the root node")]
+    CannotRenameRoot,
+
+    #[error("invalid node name '{name}': {reason}")]
+    InvalidNodeName { name: String, reason: String },
+
+    #[error("invalid node path: {0}")]
+    InvalidNodePath(String),
 
     // ── Vector / AI Errors ───────────────────────────────────────────
     #[error("Invalid vector: {0}")]
