@@ -1,332 +1,130 @@
-# 🪨 GraniteDB
+# GraniteDB
 
-<div align="center">
+**A tree-architecture memory database for AI agents**, written in Rust.
 
-**A blazing-fast, document-oriented NoSQL database engine built from scratch in Rust.**
+Agents store memories in a hierarchy — for example `root → project → session → episode → memory` — and query them as subtrees. GraniteDB keeps that tree crash-safe on disk (write-ahead log + snapshots) and exposes a small, explicit Rust API.
 
+[![CI](https://github.com/kritarth1107/GraniteDB/actions/workflows/ci.yml/badge.svg)](https://github.com/kritarth1107/GraniteDB/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org/)
-[![Status](https://img.shields.io/badge/status-alpha-yellow.svg)]()
+[![Status](https://img.shields.io/badge/status-beta-yellow.svg)](https://github.com/kritarth1107/GraniteDB/releases)
 
-*MongoDB-like flexibility · Next-gen performance · 100% open source*
-
-</div>
+> **Beta.** Current releases are tagged `*-beta.*` and published as GitHub prereleases. The engine is not production-grade yet. Do not use it as the only copy of data you cannot rebuild.
 
 ---
 
-## ✨ Features
+## What it is
 
-### 🔥 Core Engine
-- **Document-Based Data Model** — Rich BSON-like value types (strings, numbers, arrays, embedded documents, dates, binary, regex, and more)
-- **Schema Validation** — Optional JSON-Schema-like validation with type checks, range/length constraints, regex patterns, enum values, and nested schemas
-- **Write-Ahead Logging (WAL)** — Segmented WAL with CRC32 checksums per entry, LSN tracking, and automatic segment rolling for crash-proof durability
-- **Buffer Pool** — LRU-based page cache with pin/unpin eviction and performance counters
-- **Page-Based Storage** — Fixed-size pages with integrity verification and overflow support
+| You have | GraniteDB gives you |
+|---|---|
+| Agent / project / session / episode memories | Nodes with stable ids and canonical paths (`/agent/session-12/fact-3`) |
+| “Everything under this session” | `children`, `ancestors`, and preorder `subtree` walks |
+| Process crash | WAL (`tree.wal`) plus atomic `snapshot.bin` |
+| Embeddings (later) | Optional `Vec<f32>` on each payload; subtree vector search is on the roadmap |
+| Parent summaries (later) | `summary` field on every node; roll-up jobs are on the roadmap |
 
-### 🔍 Query Engine
-- **MongoDB-Style Queries** — Full support for `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`, `$exists`, `$regex`, `$type`, `$elemMatch`
-- **Logical Operators** — `$and`, `$or`, `$not`, `$nor` for complex filter compositions
-- **Query Planner** — Automatic strategy selection: ID lookup → Index scan → Collection scan
-- **Projections** — Return only the fields you need
-- **Sort, Skip & Limit** — Full pagination support
-- **Update Operators** — `$set`, `$unset`, `$inc`, `$push`, `$pull`, `$rename`
-- **Explain Plans** — Debug and optimize your queries
+This crate used to be described as a document NoSQL database. That sketch is still in the repository; **the product is the memory tree.** See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and the 15-day plan.
 
-### 📊 Aggregation Pipeline
-- **12 Pipeline Stages** — `$match`, `$project`, `$group`, `$sort`, `$limit`, `$skip`, `$unwind`, `$count`, `$addFields`, `$replaceRoot`, `$lookup`, `$out`
-- **9 Accumulators** — `$sum`, `$avg`, `$min`, `$max`, `$count`, `$push`, `$addToSet`, `$first`, `$last`
-- **JSON Pipeline Parser** — Build pipelines from JSON, just like MongoDB
-
-### 🗂️ Indexing
-- **B-Tree Indexes** — Ordered indexes for range queries with composite key support
-- **Hash Indexes** — O(1) exact-match lookups
-- **Unique Constraints** — Enforce uniqueness across indexed fields
-- **Sparse Indexes** — Skip documents missing the indexed field
-- **Index Manager** — Create, drop, and auto-maintain indexes on insert/update/delete
-
-### 🔒 Security
-- **Role-Based Access Control (RBAC)** — 5 built-in roles (`read`, `readWrite`, `dbAdmin`, `userAdmin`, `root`) + custom roles with 11 action types
-- **Argon2 Password Hashing** — Industry-standard password security
-- **AES-256-GCM Encryption at Rest** — Transparent data encryption with random nonce generation
-- **User Management** — Create, authenticate, grant/revoke roles, enable/disable accounts
-
-### 🔄 Transactions
-- **ACID Transactions** — Begin/commit/abort with automatic conflict detection
-- **Multiple Isolation Levels** — Read Uncommitted, Read Committed, Repeatable Read, Snapshot, Serializable
-- **MVCC** — Multi-Version Concurrency Control with snapshot reads and garbage collection
-- **Timeout Enforcement** — Automatic transaction abort on timeout
-
-### 🌐 Networking
-- **Async TCP Server** — Built on Tokio with per-connection task spawning
-- **JSON Wire Protocol** — 25+ command types covering all database operations
-- **Connection Pool** — Configurable max connections with tracking and lifecycle management
-- **Interactive CLI** — MongoDB-like shell with commands: `use`, `insert`, `find`, `count`, `delete`, etc.
-
-### 📡 Replication & Sharding
-- **Oplog-Based Replication** — Capped operations log with timestamp-based sync queries
-- **Replica Sets** — Primary/Secondary/Arbiter roles with heartbeat monitoring
-- **Consistent Hashing** — Shard router with virtual nodes for even data distribution
-- **Key Range Sharding** — Automatic routing based on shard key values
-
-### 📈 Monitoring
-- **17 Atomic Metrics** — Queries, inserts, updates, deletes, connections, bytes I/O, WAL writes, buffer pool hits/misses, index lookups, collection scans, transactions
-- **Server Status** — Real-time statistics via the wire protocol
+No latency or throughput numbers are published here. Benches land later; claims will follow measurements.
 
 ---
 
-## 📁 Project Structure
+## Status (0.1.0-beta.1)
 
-```
-GraniteDB/
-├── Cargo.toml                      # Dependencies & build config
-├── src/
-│   ├── lib.rs                      # Library root (17 module re-exports)
-│   ├── main.rs                     # Server entry point (CLI + boot)
-│   │
-│   ├── config/                     # ⚙️ Configuration
-│   │   ├── mod.rs
-│   │   └── settings.rs             # Server, storage, auth, replication settings
-│   │
-│   ├── error/                      # ❌ Error Types
-│   │   └── mod.rs                  # 30+ typed error variants
-│   │
-│   ├── document/                   # 📄 Document Model
-│   │   ├── mod.rs
-│   │   ├── bson.rs                 # BSON-like value types with comparisons
-│   │   ├── document.rs             # Document struct with metadata & TTL
-│   │   └── validation.rs           # Schema validation engine
-│   │
-│   ├── storage/                    # 💾 Storage Engine
-│   │   ├── mod.rs
-│   │   ├── engine.rs               # Unified storage (WAL + memory + disk)
-│   │   ├── wal.rs                  # Write-Ahead Log (segmented, checksummed)
-│   │   ├── page.rs                 # Fixed-size page management
-│   │   ├── buffer_pool.rs          # LRU page cache
-│   │   └── disk.rs                 # Low-level disk I/O
-│   │
-│   ├── collection/                 # 📦 Collections
-│   │   ├── mod.rs
-│   │   └── collection.rs           # CRUD + operator queries + capped collections
-│   │
-│   ├── database/                   # 🗄️ Database Management
-│   │   ├── mod.rs
-│   │   └── database.rs             # Multi-collection container + stats
-│   │
-│   ├── query/                      # 🔍 Query Engine
-│   │   ├── mod.rs
-│   │   ├── parser.rs               # JSON → FilterExpr + UpdateOperation
-│   │   ├── filter.rs               # Filter expression tree
-│   │   ├── planner.rs              # Strategy selection + explain
-│   │   └── executor.rs             # Execution with sort/skip/limit/projection
-│   │
-│   ├── index/                      # 🗂️ Indexing
-│   │   ├── mod.rs
-│   │   ├── btree.rs                # B-Tree index (range + composite)
-│   │   ├── hash_index.rs           # Hash index (O(1) lookups)
-│   │   └── manager.rs              # Index lifecycle management
-│   │
-│   ├── aggregation/                # 📊 Aggregation
-│   │   ├── mod.rs
-│   │   ├── stages.rs               # Stage & accumulator definitions
-│   │   └── pipeline.rs             # Pipeline executor + JSON parser
-│   │
-│   ├── transaction/                # 🔄 Transactions
-│   │   ├── mod.rs
-│   │   ├── manager.rs              # Begin/commit/abort + conflict detection
-│   │   └── mvcc.rs                 # Multi-Version Concurrency Control
-│   │
-│   ├── auth/                       # 🔒 Authentication & Security
-│   │   ├── mod.rs
-│   │   ├── user.rs                 # User management (Argon2 hashing)
-│   │   ├── rbac.rs                 # Role-Based Access Control
-│   │   └── encryption.rs           # AES-256-GCM encryption at rest
-│   │
-│   ├── network/                    # 🌐 Networking
-│   │   ├── mod.rs
-│   │   ├── server.rs               # Async TCP server (Tokio)
-│   │   ├── protocol.rs             # JSON wire protocol (25+ commands)
-│   │   ├── handler.rs              # Request routing & execution
-│   │   └── connection.rs           # Connection tracking & pool
-│   │
-│   ├── replication/                # 📡 Replication
-│   │   ├── mod.rs
-│   │   ├── oplog.rs                # Capped operations log
-│   │   └── replica.rs              # Replica set management
-│   │
-│   ├── sharding/                   # 🔀 Sharding
-│   │   ├── mod.rs
-│   │   ├── shard.rs                # Shard definition + key ranges
-│   │   └── router.rs               # Consistent hashing router
-│   │
-│   ├── cursor/                     # 📜 Cursors
-│   │   ├── mod.rs
-│   │   └── cursor.rs               # Batch iteration over results
-│   │
-│   ├── metrics/                    # 📈 Monitoring
-│   │   ├── mod.rs
-│   │   └── collector.rs            # 17 atomic performance counters
-│   │
-│   ├── utils/                      # 🔧 Utilities
-│   │   ├── mod.rs
-│   │   └── helpers.rs              # ID gen, hashing, formatting
-│   │
-│   └── cli/                        # 💻 CLI Client
-│       └── main.rs                 # Interactive shell client
-```
+**In this release**
+
+- `MemoryTree`: insert, get (id and path), move, rename, delete-subtree, children, ancestors, subtree iteration
+- Node model: `NodeId`, `NodePath`, `NodeKind`, `Payload` (JSON + optional embedding), TTL / decay fields
+- Durable open: crash-safe WAL with CRC32 and `fsync`, atomic snapshots, torn-tail recovery
+- Tests: unit tests, durability tests, a proptest over random insert/move/rename/delete
+- CI on `stable` for Ubuntu and macOS (`fmt`, `clippy -D warnings`, `test`)
+
+**Not in this release** (roadmap)
+
+- Vector similarity search inside a subtree (brute-force SIMD, then HNSW)
+- Automatic summary roll-ups
+- TTL eviction / decay sweeper
+- Criterion benches and a kill-9 crash suite
+- Dedicated tree server and Python bindings
 
 ---
 
-## 🚀 Quick Start
+## Quick start
 
-### Prerequisites
-- **Rust** ≥ 1.85 (2024 edition)
-
-### Build & Run
+Requires **Rust 1.85+** (edition 2024).
 
 ```bash
-# Clone
 git clone https://github.com/kritarth1107/GraniteDB.git
 cd GraniteDB
-
-# Build
-cargo build --release
-
-# Start the server
-cargo run --release -- --port 6380 --data-dir ./data
-
-# In another terminal, connect with the CLI
-cargo run --release --bin granite-cli
+cargo test
+cargo run --example agent_memory
 ```
 
-### CLI Usage
+### Library
 
-```
-granite:default> use mydb
-Switched to database: mydb
+```rust
+use granitedb::{MemoryTree, NodeKind, NodeSpec, Payload};
 
-granite:mydb> createcol users
+fn main() -> granitedb::GraniteResult<()> {
+    let mut tree = MemoryTree::open("./granite-data")?;
 
-granite:mydb> insert users {"name": "John", "age": 30, "email": "john@example.com"}
+    let root = tree.root_id();
+    let project = tree.insert_with(
+        root,
+        NodeSpec::new("research-bot").kind(NodeKind::Project),
+    )?;
+    let session = tree.insert_with(
+        project,
+        NodeSpec::new("session-42").kind(NodeKind::Session),
+    )?;
+    tree.insert(
+        session,
+        "prefers-rust",
+        Payload::text("The user prefers Rust for systems work"),
+    )?;
 
-granite:mydb> find users {"age": {"$gt": 25}}
+    for node in tree.subtree(project)? {
+        println!("{} {}", node.id, node.path);
+    }
 
-granite:mydb> count users
-
-granite:mydb> delete users {"name": "John"}
-```
-
-### Wire Protocol (TCP)
-
-Connect via TCP and send JSON commands:
-
-```json
-{
-  "request_id": "abc-123",
-  "command": {
-    "type": "insert_one",
-    "database": "mydb",
-    "collection": "users",
-    "document": {"name": "Alice", "age": 28}
-  }
+    tree.checkpoint()?;
+    Ok(())
 }
 ```
 
----
+`MemoryTree::ephemeral()` builds the same tree in RAM only (useful in tests). `TreeOpenOptions` controls `fsync` and auto-checkpoint interval.
 
-## 📋 Configuration
+On disk a data directory looks like:
 
-Create a `granitedb.json` file:
-
-```json
-{
-  "server": {
-    "host": "0.0.0.0",
-    "port": 6380,
-    "max_connections": 10000
-  },
-  "storage": {
-    "data_dir": "./data/granite",
-    "page_size": 16384,
-    "buffer_pool_pages": 4096,
-    "wal_fsync": true
-  },
-  "auth": {
-    "enabled": false
-  },
-  "logging": {
-    "level": "info"
-  }
-}
+```
+granite-data/
+  snapshot.bin    # last checkpoint (atomic rename)
+  tree.wal        # CRC-framed operations since that checkpoint
 ```
 
 ---
 
-## 🏗️ Architecture
+## Roadmap
 
-```
-                    ┌──────────────┐
-                    │  CLI Client  │
-                    └──────┬───────┘
-                           │ TCP/JSON
-                    ┌──────▼───────┐
-                    │  TCP Server  │   ← Tokio async, connection pool
-                    └──────┬───────┘
-                           │
-                    ┌──────▼───────┐
-                    │   Handler    │   ← Request routing, auth checks
-                    └──────┬───────┘
-                           │
-            ┌──────────────┼──────────────┐
-            │              │              │
-     ┌──────▼──────┐ ┌────▼────┐ ┌───────▼──────┐
-     │   Database  │ │  Query  │ │  Aggregation │
-     │  Manager    │ │ Engine  │ │   Pipeline   │
-     └──────┬──────┘ └────┬────┘ └───────┬──────┘
-            │              │              │
-     ┌──────▼──────────────▼──────────────▼──────┐
-     │              Collection Manager            │
-     │         (CRUD + Schema Validation)         │
-     └─────────────────┬─────────────────────────┘
-                       │
-         ┌─────────────┼─────────────┐
-         │             │             │
-  ┌──────▼──────┐ ┌───▼────┐ ┌──────▼──────┐
-  │   Storage   │ │  Index │ │ Transaction │
-  │   Engine    │ │Manager │ │   Manager   │
-  └──────┬──────┘ └────────┘ └─────────────┘
-         │
-    ┌────┼────┐
-    │    │    │
-  ┌─▼─┐┌▼──┐┌▼────────┐
-  │WAL││Buf ││  Disk   │
-  │   ││Pool││ Manager │
-  └───┘└────┘└─────────┘
-```
+Full write-up: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+1. **Day 1 (this tag)** — node model, tree ops, WAL + snapshot, tests, CI, beta release
+2. Subtree query API (kind / depth / path glob)
+3. Brute-force SIMD vector search inside a subtree
+4. HNSW, still subtree-scoped
+5. Summary roll-ups
+6. TTL and decay eviction
+7. WAL rotation and compaction
+8. Criterion benches
+9. Crash-recovery fault-injection suite
+10. Single-writer concurrent handle
+11. Tree-oriented server
+12. Python (PyO3) bindings
+13. Agent recall helper
+14. Layout / SIMD performance pass
+15. Beta hardening — still a beta tag unless days 8–9 say otherwise
 
 ---
 
-## 🤝 Contributing
+## License
 
-We welcome contributions! GraniteDB is 100% open source under the Apache 2.0 license.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
----
-
-## 📜 License
-
-This project is licensed under the **Apache License 2.0** — see the [LICENSE](LICENSE) file for details.
-
----
-
-<div align="center">
-
-**Built with ❤️ and Rust 🦀**
-
-*GraniteDB — The database that's solid as granite.*
-
-</div>
+Apache License 2.0. See [LICENSE](LICENSE).
