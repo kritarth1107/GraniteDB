@@ -97,8 +97,15 @@ On disk a data directory looks like:
 
 ```
 granite-data/
-  snapshot.bin    # last checkpoint (atomic rename)
-  tree.wal        # CRC-framed operations since that checkpoint
+  snapshot.bin                 # last checkpoint (atomic rename)
+  wal/segment_00000000.wal     # shared WriteAheadLog (tree ops + document ops)
+```
+
+Subtree vector search reuses the crate's `DistanceMetric` (exact) and `HnswIndex` (ANN):
+
+```rust
+use granitedb::DistanceMetric;
+let hits = tree.search_subtree(project, &query, 8, DistanceMetric::Cosine)?;
 ```
 
 ---

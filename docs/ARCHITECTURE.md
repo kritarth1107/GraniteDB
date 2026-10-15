@@ -20,13 +20,21 @@ The repository on `master` was a document-oriented NoSQL sketch in the MongoDB s
 | Transactions, RBAC, replication, sharding, TCP server | Modules exist | Early sketches. The crate did not compile on Rust 2024 (`gen` keyword, argon2 0.5 API, RLE parse, borrow errors) |
 | Tests | Two tiny distance unit tests | No tree tests, no crash-recovery suite, no property tests, no CI |
 
-**Keep.** Hierarchical *ideas* in comments, CRC32 length-prefixed WAL framing, HNSW as a later ANN backend, Apache-2.0 license, the `granitedb` crate name.
+### Keep / refactored / replaced
+
+| Module | Decision | Notes |
+|---|---|---|
+| `storage/wal.rs` (`WriteAheadLog`) | **Kept and hardened** | Same length-prefix + CRC framing and segment files. Added real `fsync` (`flush` + `File::sync_all`), torn-tail trim on open (instead of skip-or-error), `reset_segments` after snapshot, `WalOperation::MemoryTree`. `MemoryTree` no longer has a private WAL. |
+| `storage/engine.rs`, pages, buffer pool, disk | **Kept** | Still the document persistence path. Snapshot atomic-rename lives in `memory/snapshot.rs` and calls `storage::wal::sync_dir`. Pages/buffer pool remain loosely wired (documents are not page-packed). |
+| `vector/distance.rs` | **Kept, now used** | `MemoryTree::search_subtree` calls `DistanceMetric::compute` (cosine / L2 / dot / L1). |
+| `vector/hnsw.rs` | **Kept, now used** | Tree maintains an `HnswIndex` keyed by `NodeId`. `search_subtree_ann` searches it and filters to the subtree. |
+| `vector/quantizer.rs` | **Kept** | Product quantizer stays the compression backend for later ANN; exercised against node embeddings in tests. |
+| `vector/embedding.rs`, inverted index, query/agg, txns, cache, compression, network | **Kept** | Document-layer and server sketches. Not the product API. Compile-fixed on Rust 2024. |
+| `memory/*` | **New** | Node model, path index, `MemoryTree` ops, snapshot image. WAL *adapter* only. |
 
 **Replace as the primary API.** Collections-of-documents as the thing users program against. The new primary type is `MemoryTree`.
 
-**Defer.** Network server, Python bindings, HNSW-in-subtree, roll-up jobs, TTL eviction, Criterion numbers. They are on the roadmap, not day 1.
-
-The legacy modules stay in the tree so later days can mine them (distance functions, HNSW, config). They are not the product.
+**Defer.** Network protocol for tree ops, Python bindings, roll-up jobs, TTL eviction, Criterion numbers.
 
 ---
 
@@ -106,34 +114,31 @@ Typical agent layout:
         ┌───────┴────────┐
         │                │
         ▼                ▼
-┌──────────────┐  ┌─────────────────┐
-│  tree.wal    │  │  snapshot.bin   │
-│  GTWL recs   │  │  atomic rename  │
-│  CRC + fsync │  │  CRC + fsync    │
-└──────────────┘  └─────────────────┘
+┌──────────────────┐  ┌─────────────────┐
+│  WriteAheadLog   │  │  snapshot.bin   │
+│  wal/segment_*.  │  │  atomic rename  │
+│  MemoryTree ops  │  │  CRC + fsync    │
+└──────────────────┘  └─────────────────┘
 ```
 
 Day 1 is single-writer, in-process. Concurrency (RwLock / single-writer queue) is a later day.
 
 ### 4.1 Write-ahead log
 
-File: `<data_dir>/tree.wal`.
+Directory: `<data_dir>/wal/segment_XXXXXXXX.wal` — the **same** `WriteAheadLog` the document `StorageEngine` uses.
 
-Record:
+Record (unchanged framing):
 
 ```
-magic[4] = b"GTWL"
-version u16le
-rec_type u16le
-lsn u64le
-payload_len u32le
-crc32le          # version..len + payload
-payload          # bincode(TreeOp)
+len u32le
+bincode(WalEntry { lsn, operation, timestamp, checksum })
 ```
 
-After each append the engine `write`s, `flush`es, and (by default) `sync_all`s the file. A torn tail (short read or bad CRC at end-of-file) is truncated on open; that is a crash, not corruption. A bad CRC in the middle of the file is corruption and fails open.
+`operation` for the tree is `WalOperation::MemoryTree { op: bincode(TreeOp) }`. Document ops can live in the same log later.
 
-Logged ops: `Insert`, `Update`, `Move`, `Rename`, `DeleteSubtree`. Each carries the timestamps needed so replay does not call `now()`.
+After each append the engine `write`s, `flush`es, and (by default) `sync_all`s the file. A torn tail (short read, deserialize failure, or bad CRC at end-of-file) is truncated on open; that is a crash, not corruption.
+
+Logged tree ops: `Insert`, `Update`, `Move`, `Rename`, `DeleteSubtree`. Each carries the timestamps needed so replay does not call `now()`.
 
 ### 4.2 Snapshots
 
@@ -150,7 +155,7 @@ Auto-checkpoint every 256 mutations by default; callers can also call `checkpoin
 | Primary (`NodeId`) | `HashMap` | same, then packed slab |
 | Path | `HashMap<NodePath, NodeId>` | prefix/trie for glob |
 | Subtree | walk child lists | DFS interval (Euler tour `in`/`out`) so “is in subtree?” is O(1) and range scans work |
-| Vector | embedding stored on node | brute-force SIMD over subtree, then HNSW per tree / per hot subtree |
+| Vector | embedding on node; `search_subtree` + `search_subtree_ann` | SIMD inner-loop + PQ codes; per-hot-subtree HNSW |
 
 ---
 
@@ -230,7 +235,7 @@ src/memory/mod.rs             module root
 src/memory/id.rs              NodeId
 src/memory/path.rs            NodePath
 src/memory/node.rs            Node, NodeKind, Payload, NodeSpec
-src/memory/wal.rs             crash-safe WAL
+src/memory/wal.rs             TreeOp + adapter over storage::WriteAheadLog
 src/memory/snapshot.rs        atomic snapshot
 src/memory/tree.rs            MemoryTree
 tests/memory_tree.rs          unit tests
