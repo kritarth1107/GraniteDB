@@ -5,7 +5,7 @@
 Agents store memories in a hierarchy — for example `root → project → session → episode → memory` — and query them as subtrees. GraniteDB keeps that tree crash-safe on disk (write-ahead log + snapshots) and exposes a small, explicit Rust API.
 
 [![CI](https://github.com/kritarth1107/GraniteDB/actions/workflows/ci.yml/badge.svg)](https://github.com/kritarth1107/GraniteDB/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-see%20LICENSE-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-beta-yellow.svg)](https://github.com/kritarth1107/GraniteDB/releases)
 
 > **Beta.** Current releases are tagged `*-beta.*` and published as GitHub prereleases. The engine is not production-grade yet. Do not use it as the only copy of data you cannot rebuild.
