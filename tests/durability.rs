@@ -52,7 +52,7 @@ fn checkpoint_then_reopen_matches() {
     // WAL should be empty after checkpoint; reopen still has both nodes.
     drop(tree);
 
-    let wal = dir.path().join("tree.wal");
+    let wal = dir.path().join("wal").join("segment_00000000.wal");
     assert_eq!(std::fs::metadata(&wal).unwrap().len(), 0);
 
     let tree = MemoryTree::open(dir.path()).unwrap();
@@ -91,9 +91,10 @@ fn torn_wal_tail_is_truncated_on_open() {
     tree.insert(root, "keep", Payload::text("durable")).unwrap();
     drop(tree);
 
-    let wal_path = dir.path().join("tree.wal");
+    let wal_path = dir.path().join("wal").join("segment_00000000.wal");
     let mut wal = OpenOptions::new().append(true).open(&wal_path).unwrap();
-    wal.write_all(b"GTWL\x01\x00this is a torn record").unwrap();
+    wal.write_all(b"\x10\x00\x00\x00this is a torn record")
+        .unwrap();
     wal.flush().unwrap();
     drop(wal);
 
