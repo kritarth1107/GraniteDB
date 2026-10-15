@@ -46,16 +46,18 @@ impl PartialEq for Candidate {
 
 impl Eq for Candidate {}
 
-impl PartialOrd for Candidate {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        // Reverse for min-heap behavior in BinaryHeap (which is max-heap)
-        other.distance.partial_cmp(&self.distance)
+impl Ord for Candidate {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other
+            .distance
+            .partial_cmp(&self.distance)
+            .unwrap_or(Ordering::Equal)
     }
 }
 
-impl Ord for Candidate {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.partial_cmp(other).unwrap_or(Ordering::Equal)
+impl PartialOrd for Candidate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -72,14 +74,16 @@ impl PartialEq for FarCandidate {
     }
 }
 impl Eq for FarCandidate {}
-impl PartialOrd for FarCandidate {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.distance.partial_cmp(&other.distance)
-    }
-}
 impl Ord for FarCandidate {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.partial_cmp(other).unwrap_or(Ordering::Equal)
+        self.distance
+            .partial_cmp(&other.distance)
+            .unwrap_or(Ordering::Equal)
+    }
+}
+impl PartialOrd for FarCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -140,9 +144,11 @@ impl HnswIndex {
 
     /// Create with default config and specified dimensions + metric.
     pub fn with_dimensions(dimensions: usize, metric: DistanceMetric) -> Self {
-        let mut config = HnswConfig::default();
-        config.dimensions = dimensions;
-        config.metric = metric;
+        let config = HnswConfig {
+            dimensions,
+            metric,
+            ..HnswConfig::default()
+        };
         Self::new(config)
     }
 

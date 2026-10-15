@@ -38,11 +38,12 @@ legacy_mod!(query);
 legacy_mod!(replication);
 legacy_mod!(search);
 legacy_mod!(sharding);
-legacy_mod!(storage);
 legacy_mod!(stream);
 legacy_mod!(transaction);
 legacy_mod!(utils);
-legacy_mod!(vector);
+
+pub mod storage;
+pub mod vector;
 
 pub mod error;
 pub mod memory;
@@ -55,9 +56,10 @@ pub use database::Database;
 pub use document::{BsonValue, Document};
 pub use error::{GraniteError, GraniteResult};
 pub use memory::{
-    MemoryTree, Node, NodeId, NodeKind, NodePath, NodeSpec, Payload, TreeOpenOptions,
+    MemoryTree, Node, NodeId, NodeKind, NodePath, NodeSpec, Payload, SearchHit, TreeOpenOptions,
 };
 pub use network::GraniteServer;
 pub use search::FullTextSearchEngine;
 pub use storage::StorageEngine;
-pub use vector::HnswIndex;
+pub use storage::wal::WriteAheadLog;
+pub use vector::{DistanceMetric, HnswIndex, PQConfig, ProductQuantizer};

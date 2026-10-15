@@ -4,9 +4,18 @@ use super::path::NodePath;
 use super::snapshot::{self, TreeSnapshot};
 use super::wal::{TreeOp, TreeWal};
 use crate::error::{GraniteError, GraniteResult};
+use crate::vector::distance::DistanceMetric;
+use crate::vector::hnsw::{HnswConfig, HnswIndex};
 use chrono::Utc;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+
+/// One neighbor from [`MemoryTree::search_subtree`] / [`MemoryTree::search_subtree_ann`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct SearchHit {
+    pub id: NodeId,
+    pub distance: f32,
+}
 
 /// Options for opening a durable [`MemoryTree`].
 #[derive(Clone, Debug)]
@@ -55,6 +64,7 @@ pub struct MemoryTree {
     root_id: NodeId,
     next_id: u64,
     wal: Option<TreeWal>,
+    hnsw: HnswIndex,
     data_dir: Option<PathBuf>,
     ops_since_checkpoint: u64,
     auto_checkpoint_every: Option<u64>,
@@ -78,6 +88,7 @@ impl MemoryTree {
             root_id: NodeId::ROOT,
             next_id: 1,
             wal: None,
+            hnsw: HnswIndex::new(HnswConfig::default()),
             data_dir: None,
             ops_since_checkpoint: 0,
             auto_checkpoint_every: None,
@@ -120,8 +131,8 @@ impl MemoryTree {
             tree.restore_snapshot(snap)?;
         }
 
-        let wal_path = dir.join("tree.wal");
-        let (mut wal, records) = TreeWal::open(&wal_path, opts.fsync)?;
+        let wal_dir = dir.join("wal");
+        let (mut wal, records) = TreeWal::open(&wal_dir, opts.fsync)?;
         for (lsn, op) in records {
             if lsn <= restored_lsn {
                 continue;
@@ -131,6 +142,7 @@ impl MemoryTree {
 
         wal.set_current_lsn(restored_lsn);
         tree.wal = Some(wal);
+        tree.rebuild_hnsw();
         Ok(tree)
     }
 
@@ -336,6 +348,70 @@ impl MemoryTree {
             ids: self.subtree_ids(id),
             idx: 0,
         })
+    }
+
+    /// Exact k-NN over embeddings in `root`'s subtree, using [`DistanceMetric`].
+    pub fn search_subtree(
+        &self,
+        root: NodeId,
+        query: &[f32],
+        k: usize,
+        metric: DistanceMetric,
+    ) -> GraniteResult<Vec<SearchHit>> {
+        if k == 0 {
+            return Ok(Vec::new());
+        }
+        let _ = self.get(root)?;
+        let mut hits = Vec::new();
+        for node in self.subtree(root)? {
+            let Some(emb) = node.payload.embedding.as_deref() else {
+                continue;
+            };
+            if emb.len() != query.len() {
+                return Err(GraniteError::VectorDimensionMismatch {
+                    expected: query.len(),
+                    actual: emb.len(),
+                });
+            }
+            hits.push(SearchHit {
+                id: node.id,
+                distance: metric.compute(query, emb),
+            });
+        }
+        hits.sort_by(|a, b| {
+            a.distance
+                .partial_cmp(&b.distance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        hits.truncate(k);
+        Ok(hits)
+    }
+
+    /// Approximate k-NN via the shared [`HnswIndex`], then keep hits in `root`'s subtree.
+    pub fn search_subtree_ann(
+        &self,
+        root: NodeId,
+        query: &[f32],
+        k: usize,
+    ) -> GraniteResult<Vec<SearchHit>> {
+        if k == 0 {
+            return Ok(Vec::new());
+        }
+        let members: HashSet<String> = self.subtree(root)?.map(|n| n.id.to_string()).collect();
+        let fetch = k.saturating_mul(8).max(k);
+        Ok(self
+            .hnsw
+            .search(query, fetch)
+            .into_iter()
+            .filter(|hit| members.contains(&hit.doc_id))
+            .take(k)
+            .filter_map(|hit| {
+                hit.doc_id.parse::<u64>().ok().map(|raw| SearchHit {
+                    id: NodeId::from_raw(raw),
+                    distance: hit.distance,
+                })
+            })
+            .collect())
     }
 
     /// Preorder walk from root.
@@ -583,15 +659,19 @@ impl MemoryTree {
                 decay,
                 updated_at,
             } => {
-                let node = self
-                    .nodes
-                    .get_mut(id)
-                    .ok_or(GraniteError::NodeNotFound(*id))?;
-                node.payload = payload.clone();
-                node.summary = summary.clone();
-                node.expires_at = *expires_at;
-                node.decay = *decay;
-                node.updated_at = *updated_at;
+                {
+                    let node = self
+                        .nodes
+                        .get_mut(id)
+                        .ok_or(GraniteError::NodeNotFound(*id))?;
+                    node.payload = payload.clone();
+                    node.summary = summary.clone();
+                    node.expires_at = *expires_at;
+                    node.decay = *decay;
+                    node.updated_at = *updated_at;
+                }
+                let embedding = self.nodes.get(id).and_then(|n| n.payload.embedding.clone());
+                self.hnsw_upsert(*id, embedding.as_deref());
                 Ok(())
             }
             TreeOp::Move {
@@ -624,7 +704,9 @@ impl MemoryTree {
         }
         self.path_index.insert(node.path.clone(), id);
         self.next_id = self.next_id.max(id.raw().saturating_add(1));
+        let embedding = node.payload.embedding.clone();
         self.nodes.insert(id, node);
+        self.hnsw_upsert(id, embedding.as_deref());
         Ok(())
     }
 
@@ -685,6 +767,7 @@ impl MemoryTree {
         for rid in ids {
             if let Some(node) = self.nodes.remove(&rid) {
                 self.path_index.remove(&node.path);
+                self.hnsw.remove(&rid.to_string());
             }
         }
         Ok(())
@@ -717,6 +800,33 @@ impl MemoryTree {
             self.repath_subtree(child)?;
         }
         Ok(())
+    }
+
+    fn rebuild_hnsw(&mut self) {
+        self.hnsw = HnswIndex::new(HnswConfig::default());
+        let pairs: Vec<(NodeId, Vec<f32>)> = self
+            .nodes
+            .iter()
+            .filter_map(|(id, node)| {
+                node.payload
+                    .embedding
+                    .as_ref()
+                    .map(|emb| (*id, emb.clone()))
+            })
+            .collect();
+        for (id, emb) in pairs {
+            self.hnsw.insert(&id.to_string(), emb);
+        }
+    }
+
+    fn hnsw_upsert(&mut self, id: NodeId, embedding: Option<&[f32]>) {
+        let key = id.to_string();
+        self.hnsw.remove(&key);
+        if let Some(emb) = embedding {
+            if !emb.is_empty() {
+                self.hnsw.insert(&key, emb.to_vec());
+            }
+        }
     }
 }
 

@@ -14,5 +14,6 @@ pub mod vector_index;
 
 pub use distance::DistanceMetric;
 pub use embedding::EmbeddingStore;
-pub use hnsw::HnswIndex;
+pub use hnsw::{HnswConfig, HnswIndex};
+pub use quantizer::{PQConfig, ProductQuantizer};
 pub use vector_index::VectorIndexManager;

@@ -1,7 +1,7 @@
 use super::id::NodeId;
 use super::node::Node;
-use super::wal::sync_dir;
 use crate::error::{GraniteError, GraniteResult};
+use crate::storage::wal::sync_dir;
 use crc32fast::Hasher;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

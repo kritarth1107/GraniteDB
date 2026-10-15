@@ -144,3 +144,9 @@ impl EmbeddingStore {
         })
     }
 }
+
+impl Default for EmbeddingStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}

@@ -197,3 +197,9 @@ impl VectorIndexManager {
         })
     }
 }
+
+impl Default for VectorIndexManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
