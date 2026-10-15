@@ -43,12 +43,7 @@ impl InvertedIndex {
     }
 
     /// Index a document: add its tokens to the inverted index.
-    pub fn index_document(
-        &mut self,
-        doc_id: &str,
-        field: &str,
-        tokens: &[String],
-    ) {
+    pub fn index_document(&mut self, doc_id: &str, field: &str, tokens: &[String]) {
         // Remove previous entry (if re-indexing)
         self.remove_document(doc_id);
 

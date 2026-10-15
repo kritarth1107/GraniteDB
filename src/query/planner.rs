@@ -80,10 +80,7 @@ impl QueryPlanner {
         }
     }
 
-    fn choose_strategy(
-        filter: &FilterExpr,
-        available_indexes: &[IndexInfo],
-    ) -> ExecutionStrategy {
+    fn choose_strategy(filter: &FilterExpr, available_indexes: &[IndexInfo]) -> ExecutionStrategy {
         // Check for ID lookup (fastest)
         if Self::is_id_lookup(filter) {
             return ExecutionStrategy::IdLookup;
@@ -93,9 +90,7 @@ impl QueryPlanner {
         let filter_fields = Self::extract_fields(filter);
         for index in available_indexes {
             // Check if the index covers the query fields
-            let covers = filter_fields
-                .iter()
-                .all(|f| index.fields.contains(f));
+            let covers = filter_fields.iter().all(|f| index.fields.contains(f));
             if covers {
                 return ExecutionStrategy::IndexScan {
                     index_name: index.name.clone(),
@@ -128,9 +123,7 @@ impl QueryPlanner {
             | FilterExpr::ElemMatch { field, .. } => {
                 fields.push(field.clone());
             }
-            FilterExpr::And(exprs)
-            | FilterExpr::Or(exprs)
-            | FilterExpr::Nor(exprs) => {
+            FilterExpr::And(exprs) | FilterExpr::Or(exprs) | FilterExpr::Nor(exprs) => {
                 for expr in exprs {
                     fields.extend(Self::extract_fields(expr));
                 }

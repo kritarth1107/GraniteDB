@@ -34,11 +34,7 @@ impl HashIndex {
         bincode::serialize(values).unwrap_or_default()
     }
 
-    pub fn insert(
-        &mut self,
-        doc_id: &str,
-        field_values: &[&BsonValue],
-    ) -> GraniteResult<()> {
+    pub fn insert(&mut self, doc_id: &str, field_values: &[&BsonValue]) -> GraniteResult<()> {
         let key = Self::make_key(field_values);
 
         if self.unique {

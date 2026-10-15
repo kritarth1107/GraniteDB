@@ -101,9 +101,7 @@ impl ChangeStream {
         }
 
         // Apply type filter
-        if !self.type_filter.is_empty()
-            && !self.type_filter.contains(&event.change_type)
-        {
+        if !self.type_filter.is_empty() && !self.type_filter.contains(&event.change_type) {
             return;
         }
 

@@ -57,7 +57,10 @@ pub enum GeoShape {
     Point(GeoPoint),
     LineString(Vec<GeoPoint>),
     Polygon(Vec<Vec<GeoPoint>>),
-    Circle { center: GeoPoint, radius_meters: f64 },
+    Circle {
+        center: GeoPoint,
+        radius_meters: f64,
+    },
 }
 
 /// A geospatial query type.

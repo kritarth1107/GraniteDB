@@ -60,9 +60,19 @@ impl GraniteServer {
         println!("║     Blazing-fast Document-Oriented Database      ║");
         println!("╠══════════════════════════════════════════════════╣");
         println!("║  Listening on: {:<35}║", addr);
-        println!("║  Data dir:     {:<35}║", self.config.storage.data_dir.display());
+        println!(
+            "║  Data dir:     {:<35}║",
+            self.config.storage.data_dir.display()
+        );
         println!("║  WAL enabled:  {:<35}║", "true");
-        println!("║  Auth:         {:<35}║", if self.config.auth.enabled { "enabled" } else { "disabled" });
+        println!(
+            "║  Auth:         {:<35}║",
+            if self.config.auth.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
         println!("╚══════════════════════════════════════════════════╝");
 
         loop {
@@ -113,7 +123,9 @@ impl GraniteServer {
                                     let mut s = storage.lock().await;
                                     h.handle(&req.command, &req.request_id, &mut s)
                                 }
-                                Err(e) => Response::error("unknown", &format!("Parse error: {}", e)),
+                                Err(e) => {
+                                    Response::error("unknown", &format!("Parse error: {}", e))
+                                }
                             };
 
                             // Send response

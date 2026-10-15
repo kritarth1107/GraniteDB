@@ -43,11 +43,7 @@ impl BTreeIndex {
     }
 
     /// Insert a document into the index.
-    pub fn insert(
-        &mut self,
-        doc_id: &str,
-        field_values: &[&BsonValue],
-    ) -> GraniteResult<()> {
+    pub fn insert(&mut self, doc_id: &str, field_values: &[&BsonValue]) -> GraniteResult<()> {
         let key = Self::make_key(field_values);
 
         if self.unique {
@@ -89,11 +85,7 @@ impl BTreeIndex {
     }
 
     /// Range scan: find all document IDs where the indexed value is in [min, max].
-    pub fn range_scan(
-        &self,
-        min_values: &[&BsonValue],
-        max_values: &[&BsonValue],
-    ) -> Vec<String> {
+    pub fn range_scan(&self, min_values: &[&BsonValue], max_values: &[&BsonValue]) -> Vec<String> {
         let min_key = Self::make_key(min_values);
         let max_key = Self::make_key(max_values);
 

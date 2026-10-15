@@ -6,7 +6,6 @@
 
 use crate::database::Database;
 use crate::document::document::Document;
-use crate::error::GraniteResult;
 use crate::network::protocol::{Command, Response};
 use crate::storage::engine::StorageEngine;
 use std::collections::HashMap;
@@ -35,18 +34,18 @@ impl RequestHandler {
         let result = match command {
             Command::Ping => Ok(serde_json::json!({ "pong": true })),
 
-            Command::ServerStatus => {
-                Ok(serde_json::json!({
-                    "status": "running",
-                    "databases": self.databases.keys().collect::<Vec<_>>(),
-                    "wal_lsn": storage.current_lsn(),
-                    "collections": storage.list_collections(),
-                }))
-            }
+            Command::ServerStatus => Ok(serde_json::json!({
+                "status": "running",
+                "databases": self.databases.keys().collect::<Vec<_>>(),
+                "wal_lsn": storage.current_lsn(),
+                "collections": storage.list_collections(),
+            })),
 
             Command::CreateDatabase { name } => {
                 if self.databases.contains_key(name) {
-                    Err(crate::error::GraniteError::DatabaseAlreadyExists(name.clone()))
+                    Err(crate::error::GraniteError::DatabaseAlreadyExists(
+                        name.clone(),
+                    ))
                 } else {
                     self.databases.insert(name.clone(), Database::new(name));
                     Ok(serde_json::json!({ "created": name }))
@@ -78,7 +77,9 @@ impl RequestHandler {
                         Err(e) => Err(e),
                     }
                 } else {
-                    Err(crate::error::GraniteError::DatabaseNotFound(database.clone()))
+                    Err(crate::error::GraniteError::DatabaseNotFound(
+                        database.clone(),
+                    ))
                 }
             }
 
@@ -134,7 +135,7 @@ impl RequestHandler {
                 database,
                 collection,
                 filter,
-                sort,
+                sort: _,
                 skip,
                 limit,
                 ..
@@ -198,7 +199,9 @@ impl RequestHandler {
                         Err(e) => Err(e),
                     }
                 } else {
-                    Err(crate::error::GraniteError::DatabaseNotFound(database.clone()))
+                    Err(crate::error::GraniteError::DatabaseNotFound(
+                        database.clone(),
+                    ))
                 }
             }
 

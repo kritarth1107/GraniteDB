@@ -192,7 +192,7 @@ impl QueryParser {
                                 filter: Box::new(sub),
                             }
                         }
-                        unknown => {
+                        _unknown => {
                             // Not an operator, treat the whole object as an equality match
                             return Ok(FilterExpr::Eq {
                                 field: field.to_string(),
@@ -218,9 +218,7 @@ impl QueryParser {
     }
 
     /// Parse an update document (supports $set, $unset, $inc, $push, $pull).
-    pub fn parse_update(
-        update: &serde_json::Value,
-    ) -> GraniteResult<Vec<UpdateOperation>> {
+    pub fn parse_update(update: &serde_json::Value) -> GraniteResult<Vec<UpdateOperation>> {
         let mut ops = Vec::new();
         match update {
             serde_json::Value::Object(map) => {
@@ -310,10 +308,27 @@ impl QueryParser {
 /// An update operation to apply to a document.
 #[derive(Debug, Clone)]
 pub enum UpdateOperation {
-    Set { field: String, value: BsonValue },
-    Unset { field: String },
-    Inc { field: String, value: BsonValue },
-    Push { field: String, value: BsonValue },
-    Pull { field: String, value: BsonValue },
-    Rename { old_field: String, new_field: String },
+    Set {
+        field: String,
+        value: BsonValue,
+    },
+    Unset {
+        field: String,
+    },
+    Inc {
+        field: String,
+        value: BsonValue,
+    },
+    Push {
+        field: String,
+        value: BsonValue,
+    },
+    Pull {
+        field: String,
+        value: BsonValue,
+    },
+    Rename {
+        old_field: String,
+        new_field: String,
+    },
 }

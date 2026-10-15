@@ -152,26 +152,33 @@ impl TransactionManager {
     }
 
     /// Record a read in the transaction's read set.
-    pub fn record_read(&mut self, txn_id: &str, collection: &str, doc_id: &str) -> GraniteResult<()> {
+    pub fn record_read(
+        &mut self,
+        txn_id: &str,
+        collection: &str,
+        doc_id: &str,
+    ) -> GraniteResult<()> {
         if let Some(txn) = self.transactions.get_mut(txn_id) {
-            txn.read_set.push((collection.to_string(), doc_id.to_string()));
+            txn.read_set
+                .push((collection.to_string(), doc_id.to_string()));
         }
         Ok(())
     }
 
     /// Commit a transaction. Returns the buffered operations to apply.
     pub fn commit(&mut self, txn_id: &str) -> GraniteResult<Vec<TransactionOp>> {
-        let txn = self
-            .transactions
-            .get_mut(txn_id)
-            .ok_or_else(|| GraniteError::TransactionAborted(format!("Txn {} not found", txn_id)))?;
-
-        if txn.state != TransactionState::Active {
-            return Err(GraniteError::TransactionAborted(format!(
-                "Transaction {} is {:?}",
-                txn_id, txn.state
-            )));
-        }
+        let write_set = {
+            let txn = self.transactions.get(txn_id).ok_or_else(|| {
+                GraniteError::TransactionAborted(format!("Txn {} not found", txn_id))
+            })?;
+            if txn.state != TransactionState::Active {
+                return Err(GraniteError::TransactionAborted(format!(
+                    "Transaction {} is {:?}",
+                    txn_id, txn.state
+                )));
+            }
+            txn.write_set.clone()
+        };
 
         // Conflict detection: check if any document in the write set
         // was modified by another committed transaction
@@ -182,14 +189,17 @@ impl TransactionManager {
             if other_txn.state != TransactionState::Committed {
                 continue;
             }
-            // Check for write-write conflicts
-            for ws in &txn.write_set {
+            for ws in &write_set {
                 if other_txn.write_set.contains(ws) {
                     return Err(GraniteError::TransactionConflict(txn_id.to_string()));
                 }
             }
         }
 
+        let txn = self
+            .transactions
+            .get_mut(txn_id)
+            .ok_or_else(|| GraniteError::TransactionAborted(format!("Txn {} not found", txn_id)))?;
         let ops = txn.operations.clone();
         txn.state = TransactionState::Committed;
         tracing::debug!(txn_id = %txn_id, ops = ops.len(), "Transaction committed");

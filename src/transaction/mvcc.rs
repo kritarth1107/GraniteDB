@@ -71,13 +71,9 @@ impl MvccStore {
         committed_txns: &[String],
     ) -> Option<&VersionedEntry> {
         self.versions.get(doc_id).and_then(|versions| {
-            versions
-                .iter()
-                .rev()
-                .find(|v| {
-                    v.version <= snapshot_version
-                        && committed_txns.contains(&v.created_by_txn)
-                })
+            versions.iter().rev().find(|v| {
+                v.version <= snapshot_version && committed_txns.contains(&v.created_by_txn)
+            })
         })
     }
 

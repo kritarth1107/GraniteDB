@@ -204,10 +204,7 @@ impl SchemaValidator {
         // Enum check
         if let Some(allowed) = &rule.allowed_values {
             if !allowed.contains(value) {
-                errors.push(format!(
-                    "Field '{}': value not in allowed set",
-                    field_name
-                ));
+                errors.push(format!("Field '{}': value not in allowed set", field_name));
             }
         }
 

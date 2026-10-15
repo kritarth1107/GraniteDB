@@ -40,9 +40,10 @@ impl AggregationPipeline {
             Stage::Sort(sort_spec) => self.stage_sort(docs, sort_spec),
             Stage::Limit(n) => Ok(docs.into_iter().take(*n).collect()),
             Stage::Skip(n) => Ok(docs.into_iter().skip(*n).collect()),
-            Stage::Unwind { path, preserve_null } => {
-                self.stage_unwind(docs, path, *preserve_null)
-            }
+            Stage::Unwind {
+                path,
+                preserve_null,
+            } => self.stage_unwind(docs, path, *preserve_null),
             Stage::Count(field_name) => self.stage_count(docs, field_name),
             Stage::AddFields(fields) => self.stage_add_fields(docs, fields),
             _ => Ok(docs), // $lookup, $out, $replaceRoot handled elsewhere
@@ -197,19 +198,17 @@ impl AggregationPipeline {
                 }
             }
 
-            Accumulator::Min(expr) => {
-                docs.iter()
-                    .filter_map(|d| self.resolve_expr(expr, d))
-                    .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                    .unwrap_or(BsonValue::Null)
-            }
+            Accumulator::Min(expr) => docs
+                .iter()
+                .filter_map(|d| self.resolve_expr(expr, d))
+                .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                .unwrap_or(BsonValue::Null),
 
-            Accumulator::Max(expr) => {
-                docs.iter()
-                    .filter_map(|d| self.resolve_expr(expr, d))
-                    .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                    .unwrap_or(BsonValue::Null)
-            }
+            Accumulator::Max(expr) => docs
+                .iter()
+                .filter_map(|d| self.resolve_expr(expr, d))
+                .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                .unwrap_or(BsonValue::Null),
 
             Accumulator::Push(expr) => {
                 let values: Vec<BsonValue> = docs
@@ -321,11 +320,7 @@ impl AggregationPipeline {
         Ok(results)
     }
 
-    fn stage_count(
-        &self,
-        docs: Vec<Document>,
-        field_name: &str,
-    ) -> GraniteResult<Vec<Document>> {
+    fn stage_count(&self, docs: Vec<Document>, field_name: &str) -> GraniteResult<Vec<Document>> {
         let count = docs.len() as i64;
         let mut data = BTreeMap::new();
         data.insert(field_name.to_string(), BsonValue::Int64(count));
@@ -383,12 +378,7 @@ pub fn parse_pipeline(stages_json: &[serde_json::Value]) -> GraniteResult<Vec<St
                     }
                     "$limit" => Stage::Limit(stage_value.as_u64().unwrap_or(100) as usize),
                     "$skip" => Stage::Skip(stage_value.as_u64().unwrap_or(0) as usize),
-                    "$count" => Stage::Count(
-                        stage_value
-                            .as_str()
-                            .unwrap_or("count")
-                            .to_string(),
-                    ),
+                    "$count" => Stage::Count(stage_value.as_str().unwrap_or("count").to_string()),
                     "$unwind" => {
                         let (path, preserve) = match stage_value {
                             serde_json::Value::String(s) => (s.clone(), false),
@@ -493,12 +483,7 @@ pub fn parse_pipeline(stages_json: &[serde_json::Value]) -> GraniteResult<Vec<St
                             continue;
                         }
                     }
-                    "$out" => Stage::Out(
-                        stage_value
-                            .as_str()
-                            .unwrap_or("")
-                            .to_string(),
-                    ),
+                    "$out" => Stage::Out(stage_value.as_str().unwrap_or("").to_string()),
                     _ => continue,
                 };
                 stages.push(stage);

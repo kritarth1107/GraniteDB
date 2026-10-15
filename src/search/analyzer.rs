@@ -86,12 +86,7 @@ impl TextAnalyzer {
         tokens
     }
 
-    fn edge_ngram_analyze(
-        &self,
-        text: &str,
-        min: usize,
-        max: usize,
-    ) -> Vec<String> {
+    fn edge_ngram_analyze(&self, text: &str, min: usize, max: usize) -> Vec<String> {
         let words: Vec<&str> = text.split_whitespace().collect();
         let mut tokens = Vec::new();
 
@@ -110,7 +105,10 @@ impl TextAnalyzer {
     fn stem(&self, word: &str) -> String {
         let mut w = word.to_string();
         // Simple suffix rules
-        for suffix in &["ingly", "tion", "sion", "ment", "ness", "able", "ible", "ful", "less", "ous", "ive", "ing", "ies", "ied", "ly", "ed", "er", "es", "al", "en", "s"] {
+        for suffix in &[
+            "ingly", "tion", "sion", "ment", "ness", "able", "ible", "ful", "less", "ous", "ive",
+            "ing", "ies", "ied", "ly", "ed", "er", "es", "al", "en", "s",
+        ] {
             if w.len() > suffix.len() + 2 && w.ends_with(suffix) {
                 w.truncate(w.len() - suffix.len());
                 break;
@@ -121,15 +119,12 @@ impl TextAnalyzer {
 
     fn default_stop_words() -> HashSet<String> {
         let words = [
-            "a", "an", "and", "are", "as", "at", "be", "but", "by", "for",
-            "from", "had", "has", "have", "he", "her", "his", "how", "i",
-            "if", "in", "into", "is", "it", "its", "just", "me", "more",
-            "my", "no", "not", "of", "on", "one", "or", "our", "out",
-            "over", "own", "she", "so", "some", "than", "that", "the",
-            "their", "them", "then", "there", "these", "they", "this",
-            "to", "too", "up", "us", "very", "was", "we", "were", "what",
-            "when", "where", "which", "while", "who", "whom", "why",
-            "will", "with", "you", "your",
+            "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from", "had", "has",
+            "have", "he", "her", "his", "how", "i", "if", "in", "into", "is", "it", "its", "just",
+            "me", "more", "my", "no", "not", "of", "on", "one", "or", "our", "out", "over", "own",
+            "she", "so", "some", "than", "that", "the", "their", "them", "then", "there", "these",
+            "they", "this", "to", "too", "up", "us", "very", "was", "we", "were", "what", "when",
+            "where", "which", "while", "who", "whom", "why", "will", "with", "you", "your",
         ];
         words.iter().map(|s| s.to_string()).collect()
     }

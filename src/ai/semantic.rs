@@ -70,11 +70,7 @@ impl SemanticSearchEngine {
     }
 
     /// Register an embedding pipeline for a collection.
-    pub fn register_pipeline(
-        &mut self,
-        collection: &str,
-        pipeline: EmbeddingPipeline,
-    ) {
+    pub fn register_pipeline(&mut self, collection: &str, pipeline: EmbeddingPipeline) {
         let hnsw_config = HnswConfig {
             m: 16,
             m0: 32,
@@ -86,17 +82,11 @@ impl SemanticSearchEngine {
 
         self.indexes
             .insert(collection.to_string(), HnswIndex::new(hnsw_config));
-        self.pipelines
-            .insert(collection.to_string(), pipeline);
+        self.pipelines.insert(collection.to_string(), pipeline);
     }
 
     /// Index a document with auto-generated embeddings.
-    pub fn index_document(
-        &mut self,
-        collection: &str,
-        doc_id: &str,
-        doc: &serde_json::Value,
-    ) {
+    pub fn index_document(&mut self, collection: &str, doc_id: &str, doc: &serde_json::Value) {
         if let Some(pipeline) = self.pipelines.get(collection) {
             let text = pipeline.extract_text(doc);
             let embedding = pipeline.generate_embedding(&text);
@@ -114,10 +104,9 @@ impl SemanticSearchEngine {
         query: &str,
         k: usize,
     ) -> Vec<VectorSearchResult> {
-        if let (Some(pipeline), Some(index)) = (
-            self.pipelines.get(collection),
-            self.indexes.get(collection),
-        ) {
+        if let (Some(pipeline), Some(index)) =
+            (self.pipelines.get(collection), self.indexes.get(collection))
+        {
             let query_embedding = pipeline.generate_embedding(query);
             index.search(&query_embedding, k)
         } else {
@@ -133,11 +122,7 @@ impl SemanticSearchEngine {
         k: usize,
         keyword_scores: &HashMap<String, f64>,
     ) -> Vec<HybridSearchResult> {
-        let vector_results = self.vector_search(
-            collection,
-            query,
-            self.config.num_candidates,
-        );
+        let vector_results = self.vector_search(collection, query, self.config.num_candidates);
 
         let mut hybrid_results: Vec<HybridSearchResult> = vector_results
             .into_iter()
@@ -146,8 +131,7 @@ impl SemanticSearchEngine {
                 let ks = keyword_scores.get(&vr.doc_id).copied().unwrap_or(0.0);
 
                 // Reciprocal Rank Fusion (RRF) inspired combination
-                let hybrid = self.config.vector_weight * vs
-                    + self.config.keyword_weight * ks;
+                let hybrid = self.config.vector_weight * vs + self.config.keyword_weight * ks;
 
                 HybridSearchResult {
                     doc_id: vr.doc_id,
@@ -160,8 +144,11 @@ impl SemanticSearchEngine {
             .collect();
 
         // Sort by hybrid score descending
-        hybrid_results
-            .sort_by(|a, b| b.hybrid_score.partial_cmp(&a.hybrid_score).unwrap_or(std::cmp::Ordering::Equal));
+        hybrid_results.sort_by(|a, b| {
+            b.hybrid_score
+                .partial_cmp(&a.hybrid_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         hybrid_results.truncate(k);
         hybrid_results
@@ -170,9 +157,9 @@ impl SemanticSearchEngine {
     /// Find similar documents to a given document.
     pub fn find_similar(
         &self,
-        collection: &str,
-        doc_id: &str,
-        k: usize,
+        _collection: &str,
+        _doc_id: &str,
+        _k: usize,
     ) -> Vec<VectorSearchResult> {
         // Would look up the document's embedding and search for neighbors
         // For now, return empty (needs embedding store integration)

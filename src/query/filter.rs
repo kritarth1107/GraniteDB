@@ -24,9 +24,15 @@ pub enum FilterExpr {
     /// Less than or equal
     Lte { field: String, value: BsonValue },
     /// In array: { "field": { "$in": [v1, v2] } }
-    In { field: String, values: Vec<BsonValue> },
+    In {
+        field: String,
+        values: Vec<BsonValue>,
+    },
     /// Not in array
-    Nin { field: String, values: Vec<BsonValue> },
+    Nin {
+        field: String,
+        values: Vec<BsonValue>,
+    },
     /// Exists check
     Exists { field: String, exists: bool },
     /// Regex match
@@ -34,7 +40,10 @@ pub enum FilterExpr {
     /// Type check
     Type { field: String, bson_type: String },
     /// Element match (for arrays of documents)
-    ElemMatch { field: String, filter: Box<FilterExpr> },
+    ElemMatch {
+        field: String,
+        filter: Box<FilterExpr>,
+    },
     /// Logical AND
     And(Vec<FilterExpr>),
     /// Logical OR
@@ -49,7 +58,11 @@ pub enum FilterExpr {
 
 impl FilterExpr {
     /// Evaluate this filter against a document's data.
-    pub fn matches(&self, data: &std::collections::BTreeMap<String, BsonValue>, doc_id: &str) -> bool {
+    pub fn matches(
+        &self,
+        data: &std::collections::BTreeMap<String, BsonValue>,
+        doc_id: &str,
+    ) -> bool {
         match self {
             FilterExpr::All => true,
 
@@ -60,16 +73,12 @@ impl FilterExpr {
                     }
                 }
                 let doc = BsonValue::Document(data.clone());
-                doc.get_path(field)
-                    .map(|v| v == value)
-                    .unwrap_or(false)
+                doc.get_path(field).map(|v| v == value).unwrap_or(false)
             }
 
             FilterExpr::Ne { field, value } => {
                 let doc = BsonValue::Document(data.clone());
-                doc.get_path(field)
-                    .map(|v| v != value)
-                    .unwrap_or(true)
+                doc.get_path(field).map(|v| v != value).unwrap_or(true)
             }
 
             FilterExpr::Gt { field, value } => {
@@ -84,7 +93,9 @@ impl FilterExpr {
                 let doc = BsonValue::Document(data.clone());
                 doc.get_path(field)
                     .and_then(|v| v.partial_cmp(value))
-                    .map(|ord| matches!(ord, std::cmp::Ordering::Greater | std::cmp::Ordering::Equal))
+                    .map(|ord| {
+                        matches!(ord, std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
+                    })
                     .unwrap_or(false)
             }
 

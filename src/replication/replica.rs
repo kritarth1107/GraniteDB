@@ -53,7 +53,9 @@ impl ReplicaSet {
 
     /// Get the current primary.
     pub fn primary(&self) -> Option<&ReplicaMember> {
-        self.members.values().find(|m| m.role == ReplicaRole::Primary)
+        self.members
+            .values()
+            .find(|m| m.role == ReplicaRole::Primary)
     }
 
     /// Get all secondaries.

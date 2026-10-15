@@ -79,11 +79,7 @@ impl VectorIndexManager {
     }
 
     /// Drop a vector index.
-    pub fn drop_index(
-        &mut self,
-        collection: &str,
-        index_name: &str,
-    ) -> GraniteResult<()> {
+    pub fn drop_index(&mut self, collection: &str, index_name: &str) -> GraniteResult<()> {
         let key = format!("{}.{}", collection, index_name);
         self.indexes.remove(&key);
         self.definitions.remove(&key);
@@ -148,11 +144,7 @@ impl VectorIndexManager {
     }
 
     /// Remove a document from all vector indexes in a collection.
-    pub fn remove_vector(
-        &mut self,
-        collection: &str,
-        doc_id: &str,
-    ) {
+    pub fn remove_vector(&mut self, collection: &str, doc_id: &str) {
         let prefix = format!("{}.", collection);
         let keys: Vec<String> = self
             .indexes
@@ -170,12 +162,7 @@ impl VectorIndexManager {
     }
 
     /// Set ef_search for runtime tuning.
-    pub fn set_ef_search(
-        &mut self,
-        collection: &str,
-        index_name: &str,
-        ef: usize,
-    ) {
+    pub fn set_ef_search(&mut self, collection: &str, index_name: &str, ef: usize) {
         let key = format!("{}.{}", collection, index_name);
         if let Some(index) = self.indexes.get_mut(&key) {
             index.set_ef_search(ef);

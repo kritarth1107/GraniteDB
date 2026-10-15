@@ -59,11 +59,7 @@ impl FullTextSearchEngine {
     }
 
     /// Index a document for full-text search.
-    pub fn index_document(
-        &mut self,
-        collection: &str,
-        doc: &Document,
-    ) -> GraniteResult<()> {
+    pub fn index_document(&mut self, collection: &str, doc: &Document) -> GraniteResult<()> {
         let prefix = format!("{}.", collection);
         let keys: Vec<String> = self
             .configs
@@ -141,12 +137,7 @@ impl FullTextSearchEngine {
                 let score = self.scorer.score_document(doc_id, &query_tokens, index);
                 let matched: Vec<String> = query_tokens
                     .iter()
-                    .filter(|t| {
-                        index
-                            .get_postings(t)
-                            .iter()
-                            .any(|p| p.doc_id == *doc_id)
-                    })
+                    .filter(|t| index.get_postings(t).iter().any(|p| p.doc_id == *doc_id))
                     .cloned()
                     .collect();
 
@@ -159,7 +150,11 @@ impl FullTextSearchEngine {
             .collect();
 
         // Sort by score descending
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // Limit results
         results.truncate(limit);
@@ -201,7 +196,11 @@ impl FullTextSearchEngine {
             })
             .collect();
 
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(limit);
         Ok(results)
     }
@@ -244,11 +243,7 @@ impl FullTextSearchEngine {
     }
 
     /// Get stats for a text index.
-    pub fn stats(
-        &self,
-        collection: &str,
-        index_name: &str,
-    ) -> GraniteResult<serde_json::Value> {
+    pub fn stats(&self, collection: &str, index_name: &str) -> GraniteResult<serde_json::Value> {
         let key = format!("{}.{}", collection, index_name);
         let index = self
             .indexes

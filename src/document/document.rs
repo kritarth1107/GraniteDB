@@ -74,42 +74,29 @@ impl Document {
     }
 
     /// Create a document with a specific ID (for restoring from disk).
-    pub fn with_id(id: String, data: BTreeMap<String, BsonValue>, metadata: DocumentMetadata) -> Self {
+    pub fn with_id(
+        id: String,
+        data: BTreeMap<String, BsonValue>,
+        metadata: DocumentMetadata,
+    ) -> Self {
         Self { id, data, metadata }
+    }
+
+    /// Get a string field by key or dotted path.
+    pub fn get_string(&self, key: &str) -> Option<&str> {
+        match self.get_path(key) {
+            Some(BsonValue::String(s)) => Some(s.as_str()),
+            _ => None,
+        }
     }
 
     /// Get a field value by key.
     pub fn get(&self, key: &str) -> Option<&BsonValue> {
-        // Support dot-notation for nested lookups
-        if key.contains('.') {
-            let bson_doc = BsonValue::Document(self.data.clone());
-            // We need to return owned, so this is a workaround
-            // For non-dot keys, do the simple path
-            return self.data.get(key).or_else(|| {
-                // Dot notation: traverse
-                let parts: Vec<&str> = key.splitn(2, '.').collect();
-                if parts.len() == 2 {
-                    if let Some(BsonValue::Document(nested)) = self.data.get(parts[0]) {
-                        let nested_doc = Document {
-                            id: String::new(),
-                            data: nested.clone(),
-                            metadata: self.metadata.clone(),
-                        };
-                        // This recursion is bounded by dot depth
-                        // For deep nesting we'd need a different approach
-                        return None; // Simplified — full impl uses BsonValue::get_path
-                    }
-                }
-                None
-            });
-        }
-        self.data.get(key)
+        self.get_path(key)
     }
 
     /// Get a field using full dot-notation path.
     pub fn get_path(&self, path: &str) -> Option<&BsonValue> {
-        let doc_value = BsonValue::Document(self.data.clone());
-        // We can't return a reference to a temporary, so we use data directly
         let parts: Vec<&str> = path.split('.').collect();
         let mut current_map = &self.data;
         for (i, part) in parts.iter().enumerate() {

@@ -3,6 +3,10 @@
 // ============================================================================
 
 use crate::error::{GraniteError, GraniteResult};
+use argon2::{
+    Argon2,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -42,11 +46,11 @@ impl UserManager {
             return Err(GraniteError::UserAlreadyExists(username.to_string()));
         }
 
-        // Hash password using Argon2
-        let salt = rand::random::<[u8; 16]>();
-        let config = argon2::Config::default();
-        let hash = argon2::hash_encoded(password.as_bytes(), &salt, &config)
-            .map_err(|e| GraniteError::Internal(format!("Password hashing failed: {}", e)))?;
+        let salt = SaltString::generate(&mut OsRng);
+        let hash = Argon2::default()
+            .hash_password(password.as_bytes(), &salt)
+            .map_err(|e| GraniteError::Internal(format!("Password hashing failed: {e}")))?
+            .to_string();
 
         let user = User {
             username: username.to_string(),
@@ -65,26 +69,27 @@ impl UserManager {
 
     /// Authenticate a user.
     pub fn authenticate(&mut self, username: &str, password: &str) -> GraniteResult<&User> {
+        let parsed_hash = {
+            let user = self
+                .users
+                .get(username)
+                .ok_or_else(|| GraniteError::UserNotFound(username.to_string()))?;
+            if !user.enabled {
+                return Err(GraniteError::AuthenticationFailed(
+                    "User account is disabled".to_string(),
+                ));
+            }
+            PasswordHash::new(&user.password_hash)
+                .map_err(|e| GraniteError::Internal(format!("Invalid stored password hash: {e}")))?
+        };
+        Argon2::default()
+            .verify_password(password.as_bytes(), &parsed_hash)
+            .map_err(|_| GraniteError::AuthenticationFailed("Invalid password".to_string()))?;
+
         let user = self
             .users
             .get_mut(username)
             .ok_or_else(|| GraniteError::UserNotFound(username.to_string()))?;
-
-        if !user.enabled {
-            return Err(GraniteError::AuthenticationFailed(
-                "User account is disabled".to_string(),
-            ));
-        }
-
-        let valid = argon2::verify_encoded(&user.password_hash, password.as_bytes())
-            .map_err(|e| GraniteError::Internal(format!("Password verification failed: {}", e)))?;
-
-        if !valid {
-            return Err(GraniteError::AuthenticationFailed(
-                "Invalid password".to_string(),
-            ));
-        }
-
         user.last_login = Some(Utc::now());
         Ok(user)
     }

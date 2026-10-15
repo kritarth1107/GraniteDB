@@ -193,9 +193,8 @@ impl WriteAheadLog {
 
     /// Read entries from a single segment file.
     fn read_segment(path: &Path) -> GraniteResult<Vec<WalEntry>> {
-        let file = File::open(path).map_err(|e| {
-            GraniteError::Wal(format!("Failed to open segment {:?}: {}", path, e))
-        })?;
+        let file = File::open(path)
+            .map_err(|e| GraniteError::Wal(format!("Failed to open segment {:?}: {}", path, e)))?;
         let mut reader = BufReader::new(file);
         let mut entries = Vec::new();
 
@@ -215,13 +214,12 @@ impl WriteAheadLog {
 
             let len = u32::from_le_bytes(len_buf) as usize;
             let mut entry_buf = vec![0u8; len];
-            reader.read_exact(&mut entry_buf).map_err(|e| {
-                GraniteError::Wal(format!("Failed to read entry data: {}", e))
-            })?;
+            reader
+                .read_exact(&mut entry_buf)
+                .map_err(|e| GraniteError::Wal(format!("Failed to read entry data: {}", e)))?;
 
-            let entry: WalEntry = bincode::deserialize(&entry_buf).map_err(|e| {
-                GraniteError::Wal(format!("Failed to deserialize entry: {}", e))
-            })?;
+            let entry: WalEntry = bincode::deserialize(&entry_buf)
+                .map_err(|e| GraniteError::Wal(format!("Failed to deserialize entry: {}", e)))?;
 
             // Verify checksum
             let op_bytes = bincode::serialize(&entry.operation).unwrap_or_default();
@@ -262,9 +260,7 @@ impl WriteAheadLog {
             .create(true)
             .append(true)
             .open(&path)
-            .map_err(|e| {
-                GraniteError::Wal(format!("Failed to open segment {:?}: {}", path, e))
-            })?;
+            .map_err(|e| GraniteError::Wal(format!("Failed to open segment {:?}: {}", path, e)))?;
         self.writer = Some(BufWriter::new(file));
         self.current_segment = segment_index;
 

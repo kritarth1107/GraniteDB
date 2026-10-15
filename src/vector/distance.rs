@@ -140,7 +140,11 @@ fn manhattan_distance(a: &[f32], b: &[f32]) -> f32 {
 
 /// Normalize a vector to unit length (for cosine similarity preprocessing).
 pub fn normalize(v: &mut [f32]) {
-    let norm: f64 = v.iter().map(|x| (*x as f64) * (*x as f64)).sum::<f64>().sqrt();
+    let norm: f64 = v
+        .iter()
+        .map(|x| (*x as f64) * (*x as f64))
+        .sum::<f64>()
+        .sqrt();
     if norm > 1e-10 {
         for x in v.iter_mut() {
             *x = (*x as f64 / norm) as f32;
@@ -150,7 +154,10 @@ pub fn normalize(v: &mut [f32]) {
 
 /// Compute the magnitude (L2 norm) of a vector.
 pub fn magnitude(v: &[f32]) -> f32 {
-    v.iter().map(|x| (*x as f64) * (*x as f64)).sum::<f64>().sqrt() as f32
+    v.iter()
+        .map(|x| (*x as f64) * (*x as f64))
+        .sum::<f64>()
+        .sqrt() as f32
 }
 
 #[cfg(test)]

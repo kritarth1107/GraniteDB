@@ -77,13 +77,12 @@ impl Bm25Scorer {
         let dl = doc_length as f64;
 
         // IDF with smoothing to avoid negative values
-        let idf = ((total_docs as f64 - doc_frequency as f64 + 0.5)
-            / (doc_frequency as f64 + 0.5)
+        let idf = ((total_docs as f64 - doc_frequency as f64 + 0.5) / (doc_frequency as f64 + 0.5)
             + 1.0)
             .ln();
 
-        let tf_norm = (tf * (self.k1 + 1.0))
-            / (tf + self.k1 * (1.0 - self.b + self.b * dl / avg_doc_length));
+        let tf_norm =
+            (tf * (self.k1 + 1.0)) / (tf + self.k1 * (1.0 - self.b + self.b * dl / avg_doc_length));
 
         idf * tf_norm
     }
@@ -106,13 +105,8 @@ impl Bm25Scorer {
             let df = postings.len();
 
             if let Some(posting) = postings.iter().find(|p| p.doc_id == doc_id) {
-                total_score += self.score_term(
-                    posting.term_frequency,
-                    doc_len,
-                    avg_dl,
-                    df,
-                    total_docs,
-                );
+                total_score +=
+                    self.score_term(posting.term_frequency, doc_len, avg_dl, df, total_docs);
             }
         }
 

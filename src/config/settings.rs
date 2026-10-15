@@ -195,13 +195,9 @@ impl GraniteConfig {
     pub fn load_from_file(path: &std::path::Path) -> crate::error::GraniteResult<Self> {
         if path.exists() {
             let content = std::fs::read_to_string(path)?;
-            let config: GraniteConfig =
-                serde_json::from_str(&content).map_err(|e| {
-                    crate::error::GraniteError::ConfigError(format!(
-                        "Failed to parse config: {}",
-                        e
-                    ))
-                })?;
+            let config: GraniteConfig = serde_json::from_str(&content).map_err(|e| {
+                crate::error::GraniteError::ConfigError(format!("Failed to parse config: {}", e))
+            })?;
             Ok(config)
         } else {
             Ok(Self::default())

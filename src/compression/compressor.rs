@@ -76,8 +76,8 @@ impl CompressionEngine {
             let byte = data[i];
             let mut count = 1u8;
 
-            while i + count as usize < data.len()
-                && data[i + count as usize] == byte
+            while i + (count as usize) < data.len()
+                && data[i + (count as usize)] == byte
                 && count < 255
             {
                 count += 1;
@@ -245,8 +245,7 @@ impl CompressionEngine {
             return Vec::new();
         }
 
-        let original_len =
-            u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+        let original_len = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
         let mut result = Vec::with_capacity(original_len);
         let mut i = 4;
 
@@ -266,8 +265,7 @@ impl CompressionEngine {
                 let length = ((tag >> 2) & 0x07) as usize + 1;
                 i += 1;
                 if i + 1 < data.len() {
-                    let offset =
-                        u16::from_le_bytes([data[i], data[i + 1]]) as usize;
+                    let offset = u16::from_le_bytes([data[i], data[i + 1]]) as usize;
                     i += 2;
                     let start = result.len().saturating_sub(offset);
                     for j in 0..length {

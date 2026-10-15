@@ -83,11 +83,7 @@ impl Collection {
     }
 
     /// Insert a document into this collection.
-    pub fn insert_one(
-        &self,
-        storage: &mut StorageEngine,
-        doc: Document,
-    ) -> GraniteResult<String> {
+    pub fn insert_one(&self, storage: &mut StorageEngine, doc: Document) -> GraniteResult<String> {
         // Validate against schema if present
         if let Some(schema) = &self.metadata.schema {
             SchemaValidator::validate(&doc.data, schema)?;
@@ -125,11 +121,7 @@ impl Collection {
     }
 
     /// Find a document by ID.
-    pub fn find_by_id(
-        &self,
-        storage: &StorageEngine,
-        id: &str,
-    ) -> GraniteResult<Option<Document>> {
+    pub fn find_by_id(&self, storage: &StorageEngine, id: &str) -> GraniteResult<Option<Document>> {
         storage.get(&self.full_name, id)
     }
 
@@ -328,9 +320,7 @@ impl Collection {
                     }
                 }
                 "$regex" => {
-                    if let (BsonValue::String(text), BsonValue::String(pattern)) =
-                        (actual, value)
-                    {
+                    if let (BsonValue::String(text), BsonValue::String(pattern)) = (actual, value) {
                         regex::Regex::new(pattern)
                             .map(|re| re.is_match(text))
                             .unwrap_or(false)

@@ -96,11 +96,8 @@ impl IndexManager {
 
         for key in keys {
             if let Some(def) = self.definitions.get(&key) {
-                let field_values: Vec<&BsonValue> = def
-                    .fields
-                    .iter()
-                    .filter_map(|f| doc.data.get(f))
-                    .collect();
+                let field_values: Vec<&BsonValue> =
+                    def.fields.iter().filter_map(|f| doc.data.get(f)).collect();
 
                 // Skip if sparse and no indexed fields are present
                 if def.sparse && field_values.is_empty() {
@@ -130,11 +127,8 @@ impl IndexManager {
 
         for key in keys {
             if let Some(def) = self.definitions.get(&key) {
-                let field_values: Vec<&BsonValue> = def
-                    .fields
-                    .iter()
-                    .filter_map(|f| doc.data.get(f))
-                    .collect();
+                let field_values: Vec<&BsonValue> =
+                    def.fields.iter().filter_map(|f| doc.data.get(f)).collect();
 
                 if let Some(instance) = self.instances.get_mut(&key) {
                     match instance {

@@ -36,10 +36,7 @@ pub enum Stage {
     Skip(usize),
 
     /// Unwind an array field into multiple documents (like $unwind)
-    Unwind {
-        path: String,
-        preserve_null: bool,
-    },
+    Unwind { path: String, preserve_null: bool },
 
     /// Count documents (like $count)
     Count(String),

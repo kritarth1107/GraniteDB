@@ -87,8 +87,8 @@ fn main() {
         let request = match parse_cli_command(input, &current_db) {
             Some(req) => req,
             None => {
-                if input.starts_with("use ") {
-                    current_db = input[4..].trim().to_string();
+                if let Some(name) = input.strip_prefix("use ") {
+                    current_db = name.trim().to_string();
                     println!("Switched to database: {}", current_db);
                     continue;
                 }

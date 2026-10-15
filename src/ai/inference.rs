@@ -11,29 +11,17 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum InferenceTask {
     /// Text classification (spam detection, sentiment, etc.)
-    Classification {
-        labels: Vec<String>,
-        threshold: f64,
-    },
+    Classification { labels: Vec<String>, threshold: f64 },
     /// Named entity extraction
-    EntityExtraction {
-        entity_types: Vec<String>,
-    },
+    EntityExtraction { entity_types: Vec<String> },
     /// Text summarization
-    Summarization {
-        max_length: usize,
-    },
+    Summarization { max_length: usize },
     /// Question answering against a document
     QuestionAnswering,
     /// Zero-shot classification
-    ZeroShot {
-        candidate_labels: Vec<String>,
-    },
+    ZeroShot { candidate_labels: Vec<String> },
     /// Text generation / completion
-    TextGeneration {
-        max_tokens: usize,
-        temperature: f64,
-    },
+    TextGeneration { max_tokens: usize, temperature: f64 },
 }
 
 /// Result of an inference operation.
@@ -88,11 +76,7 @@ impl InferenceEngine {
 
     /// Run inference on text.
     /// In production, this would call the configured model API.
-    pub fn infer(
-        &self,
-        task: &InferenceTask,
-        text: &str,
-    ) -> InferenceResult {
+    pub fn infer(&self, task: &InferenceTask, text: &str) -> InferenceResult {
         let start = std::time::Instant::now();
 
         let predictions = match task {
@@ -202,11 +186,7 @@ impl InferenceEngine {
     }
 
     /// Extract entities from text.
-    pub fn extract_entities(
-        &self,
-        text: &str,
-        types: &[String],
-    ) -> Vec<InferencePrediction> {
+    pub fn extract_entities(&self, text: &str, types: &[String]) -> Vec<InferencePrediction> {
         let task = InferenceTask::EntityExtraction {
             entity_types: types.to_vec(),
         };

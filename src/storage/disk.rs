@@ -5,7 +5,7 @@
 // ============================================================================
 
 use crate::error::{GraniteError, GraniteResult};
-use crate::storage::page::{Page, PageHeader, PAGE_HEADER_SIZE};
+use crate::storage::page::{PAGE_HEADER_SIZE, Page, PageHeader};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -33,9 +33,7 @@ impl DiskManager {
             File::create(file_path)?;
         }
 
-        let file_size = std::fs::metadata(file_path)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let file_size = std::fs::metadata(file_path).map(|m| m.len()).unwrap_or(0);
         let next_page_id = if page_size > 0 {
             file_size / page_size as u64
         } else {
@@ -91,9 +89,8 @@ impl DiskManager {
     /// Read a page from disk by its page_id.
     pub fn read_page(&self, page_id: u64) -> GraniteResult<Page> {
         let offset = page_id * self.page_size as u64;
-        let mut file = File::open(&self.file_path).map_err(|e| {
-            GraniteError::Storage(format!("Failed to open data file: {}", e))
-        })?;
+        let mut file = File::open(&self.file_path)
+            .map_err(|e| GraniteError::Storage(format!("Failed to open data file: {}", e)))?;
 
         file.seek(SeekFrom::Start(offset))?;
 

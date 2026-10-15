@@ -50,9 +50,7 @@ impl EmbeddingStore {
     ) -> GraniteResult<()> {
         let dims = vector.len();
         if dims == 0 {
-            return Err(GraniteError::InvalidVector(
-                "Empty vector".to_string(),
-            ));
+            return Err(GraniteError::InvalidVector("Empty vector".to_string()));
         }
 
         let meta = EmbeddingMeta {
@@ -63,8 +61,7 @@ impl EmbeddingStore {
             created_at: chrono::Utc::now().timestamp_millis(),
         };
 
-        self.embeddings
-            .insert(doc_id.to_string(), (vector, meta));
+        self.embeddings.insert(doc_id.to_string(), (vector, meta));
 
         self.collection_index
             .entry(collection.to_string())
@@ -92,9 +89,7 @@ impl EmbeddingStore {
 
     /// Retrieve an embedding by document ID.
     pub fn get(&self, doc_id: &str) -> Option<(&[f32], &EmbeddingMeta)> {
-        self.embeddings
-            .get(doc_id)
-            .map(|(v, m)| (v.as_slice(), m))
+        self.embeddings.get(doc_id).map(|(v, m)| (v.as_slice(), m))
     }
 
     /// Get all embedding vectors for a collection (for batch operations).

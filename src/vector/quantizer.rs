@@ -80,22 +80,18 @@ impl ProductQuantizer {
             "Dimensions must be divisible by num_subquantizers"
         );
 
-        self.codebook =
-            Vec::with_capacity(self.config.num_subquantizers);
+        self.codebook = Vec::with_capacity(self.config.num_subquantizers);
 
         for sq in 0..self.config.num_subquantizers {
             let start = sq * self.sub_dim;
             let end = start + self.sub_dim;
 
             // Extract sub-vectors
-            let sub_vectors: Vec<Vec<f32>> = vectors
-                .iter()
-                .map(|v| v[start..end].to_vec())
-                .collect();
+            let sub_vectors: Vec<Vec<f32>> =
+                vectors.iter().map(|v| v[start..end].to_vec()).collect();
 
             // Run k-means on this subspace
-            let centroids =
-                self.kmeans(&sub_vectors, self.config.num_centroids);
+            let centroids = self.kmeans(&sub_vectors, self.config.num_centroids);
             self.codebook.push(centroids);
         }
 
@@ -111,8 +107,7 @@ impl ProductQuantizer {
         let mut rng = rand::thread_rng();
         let mut indices: Vec<usize> = (0..data.len()).collect();
         indices.shuffle(&mut rng);
-        let mut centroids: Vec<Vec<f32>> =
-            indices[..k].iter().map(|&i| data[i].clone()).collect();
+        let mut centroids: Vec<Vec<f32>> = indices[..k].iter().map(|&i| data[i].clone()).collect();
 
         for _iter in 0..self.config.training_iterations {
             // Assign each point to nearest centroid
@@ -122,8 +117,7 @@ impl ProductQuantizer {
                 let mut best_c = 0;
                 let mut best_dist = f32::MAX;
                 for (c, centroid) in centroids.iter().enumerate() {
-                    let dist =
-                        DistanceMetric::Euclidean.compute(point, centroid);
+                    let dist = DistanceMetric::Euclidean.compute(point, centroid);
                     if dist < best_dist {
                         best_dist = dist;
                         best_c = c;
@@ -167,8 +161,7 @@ impl ProductQuantizer {
             let mut best_c = 0u8;
             let mut best_dist = f32::MAX;
             for (c, centroid) in self.codebook[sq].iter().enumerate() {
-                let dist =
-                    DistanceMetric::Euclidean.compute(sub_vec, centroid);
+                let dist = DistanceMetric::Euclidean.compute(sub_vec, centroid);
                 if dist < best_dist {
                     best_dist = dist;
                     best_c = c as u8;
@@ -186,9 +179,7 @@ impl ProductQuantizer {
         let mut vector = Vec::with_capacity(self.config.dimensions);
 
         for (sq, &centroid_idx) in code.iter().enumerate() {
-            vector.extend_from_slice(
-                &self.codebook[sq][centroid_idx as usize],
-            );
+            vector.extend_from_slice(&self.codebook[sq][centroid_idx as usize]);
         }
 
         vector
@@ -196,11 +187,7 @@ impl ProductQuantizer {
 
     /// Compute asymmetric distance between a raw query and a PQ code.
     /// This avoids decoding the code, providing faster search.
-    pub fn asymmetric_distance(
-        &self,
-        query: &[f32],
-        code: &[u8],
-    ) -> f32 {
+    pub fn asymmetric_distance(&self, query: &[f32], code: &[u8]) -> f32 {
         let mut total_dist = 0.0f32;
 
         for (sq, &centroid_idx) in code.iter().enumerate() {
@@ -208,8 +195,7 @@ impl ProductQuantizer {
             let end = start + self.sub_dim;
             let sub_query = &query[start..end];
             let centroid = &self.codebook[sq][centroid_idx as usize];
-            total_dist +=
-                DistanceMetric::Euclidean.compute(sub_query, centroid);
+            total_dist += DistanceMetric::Euclidean.compute(sub_query, centroid);
         }
 
         total_dist
@@ -217,8 +203,7 @@ impl ProductQuantizer {
 
     /// Compression ratio achieved.
     pub fn compression_ratio(&self) -> f32 {
-        let original_size =
-            self.config.dimensions * std::mem::size_of::<f32>();
+        let original_size = self.config.dimensions * std::mem::size_of::<f32>();
         let compressed_size = self.config.num_subquantizers; // 1 byte each
         original_size as f32 / compressed_size as f32
     }

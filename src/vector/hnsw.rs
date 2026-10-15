@@ -149,7 +149,7 @@ impl HnswIndex {
     /// Generate a random level for a new node.
     fn random_level(&self) -> usize {
         let mut rng = rand::thread_rng();
-        let r: f64 = rng.gen();
+        let r: f64 = rng.r#gen();
         (-r.ln() * self.level_mult).floor() as usize
     }
 
@@ -208,12 +208,12 @@ impl HnswIndex {
             let neighbors = self.search_layer(&node_vec, current_ep, ef, lev);
 
             // Select M best neighbors
-            let m = if lev == 0 { self.config.m0 } else { self.config.m };
-            let selected: Vec<usize> = neighbors
-                .iter()
-                .take(m)
-                .map(|c| c.index)
-                .collect();
+            let m = if lev == 0 {
+                self.config.m0
+            } else {
+                self.config.m
+            };
+            let selected: Vec<usize> = neighbors.iter().take(m).map(|c| c.index).collect();
 
             // Connect node to selected neighbors
             self.nodes[node_idx].connections[lev] = selected.clone();
@@ -221,26 +221,30 @@ impl HnswIndex {
             // Connect neighbors back to this node (bidirectional)
             for &neighbor_idx in &selected {
                 if lev <= self.nodes[neighbor_idx].max_layer {
-                    let max_conn = if lev == 0 { self.config.m0 } else { self.config.m };
+                    let max_conn = if lev == 0 {
+                        self.config.m0
+                    } else {
+                        self.config.m
+                    };
                     self.nodes[neighbor_idx].connections[lev].push(node_idx);
 
                     // Prune if too many connections
                     if self.nodes[neighbor_idx].connections[lev].len() > max_conn {
                         let nv = self.nodes[neighbor_idx].vector.clone();
-                        let mut scored: Vec<(f32, usize)> = self.nodes[neighbor_idx]
-                            .connections[lev]
+                        let mut scored: Vec<(f32, usize)> = self.nodes[neighbor_idx].connections
+                            [lev]
                             .iter()
                             .map(|&idx| {
-                                let dist =
-                                    self.config.metric.compute(&nv, &self.nodes[idx].vector);
+                                let dist = self.config.metric.compute(&nv, &self.nodes[idx].vector);
                                 (dist, idx)
                             })
                             .collect();
-                        scored.sort_by(|a, b| {
-                            a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal)
-                        });
-                        self.nodes[neighbor_idx].connections[lev] =
-                            scored.into_iter().take(max_conn).map(|(_, idx)| idx).collect();
+                        scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+                        self.nodes[neighbor_idx].connections[lev] = scored
+                            .into_iter()
+                            .take(max_conn)
+                            .map(|(_, idx)| idx)
+                            .collect();
                     }
                 }
             }
@@ -260,14 +264,19 @@ impl HnswIndex {
     /// Greedy search for the single closest node at a given layer.
     fn greedy_closest(&self, start: usize, query: &[f32], level: usize) -> usize {
         let mut current = start;
-        let mut current_dist = self.config.metric.compute(query, &self.nodes[current].vector);
+        let mut current_dist = self
+            .config
+            .metric
+            .compute(query, &self.nodes[current].vector);
 
         loop {
             let mut changed = false;
             if level <= self.nodes[current].max_layer {
                 for &neighbor in &self.nodes[current].connections[level] {
-                    let dist =
-                        self.config.metric.compute(query, &self.nodes[neighbor].vector);
+                    let dist = self
+                        .config
+                        .metric
+                        .compute(query, &self.nodes[neighbor].vector);
                     if dist < current_dist {
                         current = neighbor;
                         current_dist = dist;
@@ -283,13 +292,7 @@ impl HnswIndex {
     }
 
     /// Search within a single layer using beam search.
-    fn search_layer(
-        &self,
-        query: &[f32],
-        entry: usize,
-        ef: usize,
-        level: usize,
-    ) -> Vec<Candidate> {
+    fn search_layer(&self, query: &[f32], entry: usize, ef: usize, level: usize) -> Vec<Candidate> {
         let entry_dist = self.config.metric.compute(query, &self.nodes[entry].vector);
 
         let mut candidates: BinaryHeap<Candidate> = BinaryHeap::new();
@@ -351,7 +354,11 @@ impl HnswIndex {
                 index: fc.index,
             })
             .collect();
-        final_results.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap_or(Ordering::Equal));
+        final_results.sort_by(|a, b| {
+            a.distance
+                .partial_cmp(&b.distance)
+                .unwrap_or(Ordering::Equal)
+        });
         final_results
     }
 
@@ -405,11 +412,9 @@ impl HnswIndex {
             for lev in 0..=self.nodes[node_idx].max_layer {
                 let neighbors: Vec<usize> = self.nodes[node_idx].connections[lev].clone();
                 for neighbor_idx in neighbors {
-                    if neighbor_idx < self.nodes.len()
-                        && lev <= self.nodes[neighbor_idx].max_layer
+                    if neighbor_idx < self.nodes.len() && lev <= self.nodes[neighbor_idx].max_layer
                     {
-                        self.nodes[neighbor_idx].connections[lev]
-                            .retain(|&idx| idx != node_idx);
+                        self.nodes[neighbor_idx].connections[lev].retain(|&idx| idx != node_idx);
                     }
                 }
             }

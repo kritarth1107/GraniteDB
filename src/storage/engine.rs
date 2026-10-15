@@ -75,8 +75,8 @@ impl StorageEngine {
 
     /// Insert a document into storage. Writes to WAL first, then memory.
     pub fn insert(&mut self, collection: &str, doc: &Document) -> GraniteResult<()> {
-        let serialized = bincode::serialize(doc)
-            .map_err(|e| GraniteError::Serialization(e.to_string()))?;
+        let serialized =
+            bincode::serialize(doc).map_err(|e| GraniteError::Serialization(e.to_string()))?;
 
         // WAL first
         self.wal.append(WalOperation::Insert {
@@ -97,8 +97,8 @@ impl StorageEngine {
 
     /// Update a document in storage.
     pub fn update(&mut self, collection: &str, doc: &Document) -> GraniteResult<()> {
-        let serialized = bincode::serialize(doc)
-            .map_err(|e| GraniteError::Serialization(e.to_string()))?;
+        let serialized =
+            bincode::serialize(doc).map_err(|e| GraniteError::Serialization(e.to_string()))?;
 
         self.wal.append(WalOperation::Update {
             collection: collection.to_string(),
@@ -161,10 +161,7 @@ impl StorageEngine {
 
     /// Get the count of documents in a collection.
     pub fn document_count(&self, collection: &str) -> usize {
-        self.mem_store
-            .get(collection)
-            .map(|s| s.len())
-            .unwrap_or(0)
+        self.mem_store.get(collection).map(|s| s.len()).unwrap_or(0)
     }
 
     /// Create a collection entry (WAL-logged).
@@ -230,10 +227,7 @@ impl StorageEngine {
             return Ok(());
         }
 
-        tracing::info!(
-            "Recovering from WAL: {} entries to replay",
-            entries.len()
-        );
+        tracing::info!("Recovering from WAL: {} entries to replay", entries.len());
 
         for entry in entries {
             match entry.operation {
@@ -267,17 +261,13 @@ impl StorageEngine {
                         col_store.remove(&document_id);
                     }
                 }
-                WalOperation::CreateCollection {
-                    collection, ..
-                } => {
+                WalOperation::CreateCollection { collection, .. } => {
                     self.mem_store
                         .entry(collection.clone())
                         .or_insert_with(HashMap::new);
                     let _ = self.ensure_disk_manager(&collection);
                 }
-                WalOperation::DropCollection {
-                    collection, ..
-                } => {
+                WalOperation::DropCollection { collection, .. } => {
                     self.mem_store.remove(&collection);
                     self.disk_managers.remove(&collection);
                 }

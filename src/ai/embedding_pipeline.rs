@@ -60,10 +60,7 @@ impl EmbeddingPipeline {
     }
 
     /// Extract text from a document based on configured fields.
-    pub fn extract_text(
-        &self,
-        doc: &serde_json::Value,
-    ) -> String {
+    pub fn extract_text(&self, doc: &serde_json::Value) -> String {
         let mut texts = Vec::new();
         for field in &self.fields {
             if let Some(val) = doc.get(field) {

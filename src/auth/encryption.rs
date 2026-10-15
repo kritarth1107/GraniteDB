@@ -4,8 +4,8 @@
 
 use crate::error::{GraniteError, GraniteResult};
 use aes_gcm::{
-    aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit},
 };
 use rand::RngCore;
 
