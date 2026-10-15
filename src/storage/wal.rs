@@ -63,6 +63,8 @@ pub enum WalOperation {
     TxnAbort { txn_id: String },
     /// Checkpoint marker
     Checkpoint { timestamp: i64 },
+    /// A `MemoryTree` mutation. `op` is bincode of `memory::wal::TreeOp`.
+    MemoryTree { op: Vec<u8> },
 }
 
 /// A single WAL log entry.
@@ -115,6 +117,7 @@ impl WriteAheadLog {
         };
 
         wal.open_segment(latest_segment)?;
+        wal.trim_torn_tail()?;
         Ok(wal)
     }
 
@@ -152,10 +155,14 @@ impl WriteAheadLog {
                 .write_all(&entry_bytes)
                 .map_err(|e| GraniteError::Wal(format!("Write entry failed: {}", e)))?;
 
+            writer
+                .flush()
+                .map_err(|e| GraniteError::Wal(format!("Flush failed: {}", e)))?;
             if self.fsync {
                 writer
-                    .flush()
-                    .map_err(|e| GraniteError::Wal(format!("Flush failed: {}", e)))?;
+                    .get_ref()
+                    .sync_all()
+                    .map_err(|e| GraniteError::Wal(format!("fsync failed: {}", e)))?;
             }
 
             self.current_segment_bytes += 4 + entry_bytes.len();
@@ -191,15 +198,20 @@ impl WriteAheadLog {
         Ok(entries)
     }
 
-    /// Read entries from a single segment file.
+    /// Read entries from a single segment file. A torn tail is ignored.
     fn read_segment(path: &Path) -> GraniteResult<Vec<WalEntry>> {
+        Ok(Self::read_segment_with_tail(path)?.0)
+    }
+
+    /// Read a segment and the byte offset of the last complete record.
+    fn read_segment_with_tail(path: &Path) -> GraniteResult<(Vec<WalEntry>, u64)> {
         let file = File::open(path)
             .map_err(|e| GraniteError::Wal(format!("Failed to open segment {:?}: {}", path, e)))?;
         let mut reader = BufReader::new(file);
         let mut entries = Vec::new();
+        let mut last_good: u64 = 0;
 
         loop {
-            // Read 4-byte length prefix
             let mut len_buf = [0u8; 4];
             match reader.read_exact(&mut len_buf) {
                 Ok(_) => {}
@@ -213,27 +225,37 @@ impl WriteAheadLog {
             }
 
             let len = u32::from_le_bytes(len_buf) as usize;
+            if len > 64 * 1024 * 1024 {
+                break;
+            }
             let mut entry_buf = vec![0u8; len];
-            reader
-                .read_exact(&mut entry_buf)
-                .map_err(|e| GraniteError::Wal(format!("Failed to read entry data: {}", e)))?;
+            match reader.read_exact(&mut entry_buf) {
+                Ok(()) => {}
+                Err(ref e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(e) => {
+                    return Err(GraniteError::Wal(format!(
+                        "Failed to read entry data: {}",
+                        e
+                    )));
+                }
+            }
 
-            let entry: WalEntry = bincode::deserialize(&entry_buf)
-                .map_err(|e| GraniteError::Wal(format!("Failed to deserialize entry: {}", e)))?;
+            let Ok(entry) = bincode::deserialize::<WalEntry>(&entry_buf) else {
+                break;
+            };
 
-            // Verify checksum
             let op_bytes = bincode::serialize(&entry.operation).unwrap_or_default();
             let mut hasher = Hasher::new();
             hasher.update(&op_bytes);
             if hasher.finalize() != entry.checksum {
-                tracing::warn!(lsn = entry.lsn, "WAL entry checksum mismatch — skipping");
-                continue;
+                break;
             }
 
             entries.push(entry);
+            last_good += 4 + len as u64;
         }
 
-        Ok(entries)
+        Ok((entries, last_good))
     }
 
     /// List all WAL segment files in the directory.
@@ -259,6 +281,7 @@ impl WriteAheadLog {
         let file = OpenOptions::new()
             .create(true)
             .append(true)
+            .truncate(false)
             .open(&path)
             .map_err(|e| GraniteError::Wal(format!("Failed to open segment {:?}: {}", path, e)))?;
         self.writer = Some(BufWriter::new(file));
@@ -327,13 +350,124 @@ impl WriteAheadLog {
         self.current_lsn
     }
 
-    /// Flush the WAL to disk.
+    /// Flush the WAL to disk. When `fsync` is on, also `sync_all`s the file.
     pub fn flush(&mut self) -> GraniteResult<()> {
         if let Some(writer) = &mut self.writer {
             writer
                 .flush()
                 .map_err(|e| GraniteError::Wal(format!("Flush failed: {}", e)))?;
+            if self.fsync {
+                writer
+                    .get_ref()
+                    .sync_all()
+                    .map_err(|e| GraniteError::Wal(format!("fsync failed: {}", e)))?;
+            }
         }
         Ok(())
+    }
+
+    /// Raise the LSN so replay after a snapshot does not reuse sequence numbers.
+    pub fn set_current_lsn(&mut self, lsn: u64) {
+        if lsn > self.current_lsn {
+            self.current_lsn = lsn;
+        }
+    }
+
+    /// Directory that holds `segment_*.wal` files.
+    pub fn wal_dir(&self) -> &Path {
+        &self.wal_dir
+    }
+
+    /// Drop every segment after a successful snapshot. Keeps the in-memory LSN.
+    pub fn reset_segments(&mut self) -> GraniteResult<()> {
+        if let Some(writer) = &mut self.writer {
+            writer
+                .flush()
+                .map_err(|e| GraniteError::Wal(format!("Flush failed: {}", e)))?;
+        }
+        self.writer = None;
+        for path in Self::list_segments(&self.wal_dir)? {
+            std::fs::remove_file(&path)
+                .map_err(|e| GraniteError::Wal(format!("remove segment {:?}: {}", path, e)))?;
+        }
+        self.current_segment = 0;
+        self.current_segment_bytes = 0;
+        self.open_segment(0)?;
+        if self.fsync {
+            self.flush()?;
+            sync_dir(&self.wal_dir)?;
+        }
+        Ok(())
+    }
+
+    fn segment_path(&self, index: u64) -> PathBuf {
+        self.wal_dir.join(format!("segment_{:08}.wal", index))
+    }
+
+    fn trim_torn_tail(&mut self) -> GraniteResult<()> {
+        let path = self.segment_path(self.current_segment);
+        if !path.exists() {
+            return Ok(());
+        }
+        let last_good = Self::read_segment_with_tail(&path)?.1;
+        let len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        if last_good >= len {
+            return Ok(());
+        }
+        self.writer = None;
+        let file = OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .map_err(|e| GraniteError::Wal(format!("open for trim {:?}: {}", path, e)))?;
+        file.set_len(last_good)
+            .map_err(|e| GraniteError::Wal(format!("trim {:?}: {}", path, e)))?;
+        if self.fsync {
+            file.sync_all()
+                .map_err(|e| GraniteError::Wal(format!("fsync trim: {}", e)))?;
+        }
+        self.open_segment(self.current_segment)?;
+        Ok(())
+    }
+}
+
+/// `fsync` a directory (needed after rename/unlink of WAL segments or snapshots).
+pub fn sync_dir(dir: &Path) -> GraniteResult<()> {
+    File::open(dir)
+        .and_then(|d| d.sync_all())
+        .map_err(|e| GraniteError::Wal(format!("fsync dir {}: {e}", dir.display())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn append_replay_and_torn_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut wal = WriteAheadLog::open(dir.path(), 1024 * 1024, false).unwrap();
+        wal.append(WalOperation::Checkpoint { timestamp: 1 })
+            .unwrap();
+        wal.append(WalOperation::MemoryTree { op: vec![1, 2, 3] })
+            .unwrap();
+        wal.flush().unwrap();
+        drop(wal);
+
+        let seg = dir.path().join("segment_00000000.wal");
+        {
+            let mut f = OpenOptions::new().append(true).open(&seg).unwrap();
+            f.write_all(&[8, 0, 0, 0, 9, 9, 9]).unwrap();
+        }
+
+        let wal = WriteAheadLog::open(dir.path(), 1024 * 1024, false).unwrap();
+        let entries = WriteAheadLog::read_all_entries(dir.path()).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(matches!(
+            entries[1].operation,
+            WalOperation::MemoryTree { .. }
+        ));
+        assert_eq!(wal.current_lsn(), 2);
+        let len = std::fs::metadata(&seg).unwrap().len();
+        assert!(len > 0);
+        assert!(len < 8 + 10000);
     }
 }

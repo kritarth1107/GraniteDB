@@ -60,6 +60,7 @@ impl DiskManager {
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&self.file_path)?;
 
         file.seek(SeekFrom::Start(offset))?;

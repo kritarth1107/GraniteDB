@@ -10,4 +10,4 @@ pub mod wal;
 
 pub use buffer_pool::BufferPool;
 pub use engine::StorageEngine;
-pub use wal::WriteAheadLog;
+pub use wal::{WalOperation, WriteAheadLog};

@@ -72,8 +72,8 @@ impl BufferPool {
         let mut evicted = None;
 
         // If already present, just replace
-        if self.pages.contains_key(&page_id) {
-            self.pages.insert(page_id, page);
+        if let std::collections::hash_map::Entry::Occupied(mut e) = self.pages.entry(page_id) {
+            e.insert(page);
             self.touch(page_id);
             return Ok(None);
         }

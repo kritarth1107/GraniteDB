@@ -10,7 +10,6 @@ use crate::document::Document;
 use crate::error::{GraniteError, GraniteResult};
 use crate::storage::buffer_pool::BufferPool;
 use crate::storage::disk::DiskManager;
-use crate::storage::page::Page;
 use crate::storage::wal::{WalOperation, WriteAheadLog};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -86,10 +85,7 @@ impl StorageEngine {
         })?;
 
         // Memory store
-        let col_store = self
-            .mem_store
-            .entry(collection.to_string())
-            .or_insert_with(HashMap::new);
+        let col_store = self.mem_store.entry(collection.to_string()).or_default();
         col_store.insert(doc.id.clone(), serialized);
 
         Ok(())
@@ -106,10 +102,7 @@ impl StorageEngine {
             data: serialized.clone(),
         })?;
 
-        let col_store = self
-            .mem_store
-            .entry(collection.to_string())
-            .or_insert_with(HashMap::new);
+        let col_store = self.mem_store.entry(collection.to_string()).or_default();
         col_store.insert(doc.id.clone(), serialized);
 
         Ok(())
@@ -170,9 +163,7 @@ impl StorageEngine {
             database: database.to_string(),
             collection: collection.to_string(),
         })?;
-        self.mem_store
-            .entry(collection.to_string())
-            .or_insert_with(HashMap::new);
+        self.mem_store.entry(collection.to_string()).or_default();
         self.ensure_disk_manager(collection)?;
         Ok(())
     }
@@ -236,10 +227,7 @@ impl StorageEngine {
                     document_id,
                     data,
                 } => {
-                    let col_store = self
-                        .mem_store
-                        .entry(collection)
-                        .or_insert_with(HashMap::new);
+                    let col_store = self.mem_store.entry(collection).or_default();
                     col_store.insert(document_id, data);
                 }
                 WalOperation::Update {
@@ -247,10 +235,7 @@ impl StorageEngine {
                     document_id,
                     data,
                 } => {
-                    let col_store = self
-                        .mem_store
-                        .entry(collection)
-                        .or_insert_with(HashMap::new);
+                    let col_store = self.mem_store.entry(collection).or_default();
                     col_store.insert(document_id, data);
                 }
                 WalOperation::Delete {
@@ -262,9 +247,7 @@ impl StorageEngine {
                     }
                 }
                 WalOperation::CreateCollection { collection, .. } => {
-                    self.mem_store
-                        .entry(collection.clone())
-                        .or_insert_with(HashMap::new);
+                    self.mem_store.entry(collection.clone()).or_default();
                     let _ = self.ensure_disk_manager(&collection);
                 }
                 WalOperation::DropCollection { collection, .. } => {
