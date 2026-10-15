@@ -9,13 +9,13 @@ use granitedb::config::GraniteConfig;
 use granitedb::network::GraniteServer;
 use std::path::PathBuf;
 
-/// GraniteDB — A blazing-fast, document-oriented NoSQL database
+/// GraniteDB — tree-architecture memory database for AI agents (beta)
 #[derive(Parser, Debug)]
 #[command(
     name = "granitedb",
-    version = "0.1.0",
-    about = "GraniteDB — Blazing-fast document-oriented NoSQL database engine",
-    long_about = "GraniteDB is a high-performance, document-oriented NoSQL database engine\nbuilt from scratch in Rust. It combines MongoDB-like flexibility with\nnext-gen performance, featuring WAL-based durability, B-Tree indexing,\naggregation pipelines, RBAC, and more."
+    version = env!("CARGO_PKG_VERSION"),
+    about = "GraniteDB — tree-architecture memory database for AI agents",
+    long_about = "GraniteDB stores agent memories as a durable tree (root → project → session → episode → memory).\nThis binary still boots the legacy document TCP sketch; the supported library API is MemoryTree.\nBeta: not production-grade."
 )]
 struct Cli {
     /// Path to the configuration file
@@ -77,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
-    tracing::info!("Starting GraniteDB v0.1.0");
+    tracing::info!("Starting GraniteDB v{}", env!("CARGO_PKG_VERSION"));
 
     // Ensure data directories exist
     std::fs::create_dir_all(&config.storage.data_dir)?;

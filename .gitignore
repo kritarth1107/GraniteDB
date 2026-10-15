@@ -1,6 +1,5 @@
 # Build
 /target/
-Cargo.lock
 
 # Data
 /data/
