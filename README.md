@@ -29,7 +29,7 @@ No latency or throughput numbers are published here. Benches land later; claims 
 
 ---
 
-## Status (0.2.0-beta.1)
+## Status (0.3.0-beta.1)
 
 **In this release**
 
@@ -38,14 +38,15 @@ No latency or throughput numbers are published here. Benches land later; claims 
 - `query(root)`: filter by `NodeKind`, relative depth, JSON payload predicates, recency, and a limit
 - Path globs: `*` (one segment) and `**` (zero or more), resolved from a literal path-index prefix
 - Node model: `NodeId`, `NodePath`, `NodeKind`, `Payload` (JSON + optional embedding), TTL / decay fields
-- Subtree vector search: exact `search_subtree` and ANN `search_subtree_ann`, both scoped by Euler interval
+- Exact subtree k-NN: `search_subtree` for cosine / L2 / dot / L1, Euler-range membership, auto-vectorized f32 kernels, bounded k-heap
+- ANN `search_subtree_ann` still filters the shared HNSW index by Euler interval (recall work is next)
 - Durable open: crash-safe WAL with CRC32 and `fsync`, atomic snapshots, torn-tail recovery
-- Tests: unit tests (including each filter and glob form), durability reopen of intervals and queries, a proptest that interval membership matches ancestor walking
+- Tests: kernel agreement vs a scalar reference, subtree k-NN for every metric, query/glob/interval coverage, durability reopen, interval proptest
 - CI on `stable` for Ubuntu and macOS (`fmt`, `clippy -D warnings`, `test`)
 
 **Not in this release** (roadmap)
 
-- SIMD inner-loop vector kernels and published recall numbers
+- HNSW recall numbers and incremental per-subtree ANN
 - Automatic summary roll-ups
 - TTL eviction / decay sweeper
 - Criterion benches and a kill-9 crash suite
@@ -115,7 +116,7 @@ granite-data/
   wal/segment_00000000.wal     # shared WriteAheadLog (tree ops + document ops)
 ```
 
-Subtree vector search reuses the crate's `DistanceMetric` (exact) and `HnswIndex` (ANN):
+Subtree vector search scores the Euler range of a root with `DistanceMetric` (exact, SIMD-friendly kernels) and can also filter the shared `HnswIndex` (ANN):
 
 ```rust
 use granitedb::DistanceMetric;
@@ -129,8 +130,8 @@ let hits = tree.search_subtree(project, &query, 8, DistanceMetric::Cosine)?;
 Full write-up: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 1. Day 1 — node model, tree ops, WAL + snapshot, tests, CI, beta release
-2. **Day 2 (this tag)** — subtree query API, path globs, DFS interval numbers
-3. Brute-force SIMD vector search inside a subtree
+2. Day 2 — subtree query API, path globs, DFS interval numbers
+3. **Day 3 (this tag)** — brute-force SIMD vector search inside a subtree
 4. HNSW, still subtree-scoped
 5. Summary roll-ups
 6. TTL and decay eviction

@@ -26,7 +26,7 @@ The repository on `master` was a document-oriented NoSQL sketch in the MongoDB s
 |---|---|---|
 | `storage/wal.rs` (`WriteAheadLog`) | **Kept and hardened** | Same length-prefix + CRC framing and segment files. Added real `fsync` (`flush` + `File::sync_all`), torn-tail trim on open (instead of skip-or-error), `reset_segments` after snapshot, `WalOperation::MemoryTree`. `MemoryTree` no longer has a private WAL. |
 | `storage/engine.rs`, pages, buffer pool, disk | **Kept** | Still the document persistence path. Snapshot atomic-rename lives in `memory/snapshot.rs` and calls `storage::wal::sync_dir`. Pages/buffer pool remain loosely wired (documents are not page-packed). |
-| `vector/distance.rs` | **Kept, now used** | `MemoryTree::search_subtree` calls `DistanceMetric::compute` (cosine / L2 / dot / L1). |
+| `vector/distance.rs` | **Kept, now used** | `DistanceMetric::compute` dispatches to auto-vectorized f32 kernels (cosine / L2 / dot / L1). A scalar `f64` path is the test oracle. |
 | `vector/hnsw.rs` | **Kept, now used** | Tree maintains an `HnswIndex` keyed by `NodeId`. `search_subtree_ann` searches it and filters to the subtree. |
 | `vector/quantizer.rs` | **Kept** | Product quantizer stays the compression backend for later ANN; exercised against node embeddings in tests. |
 | `vector/embedding.rs`, inverted index, query/agg, txns, cache, compression, network | **Kept** | Document-layer and server sketches. Not the product API. Compile-fixed on Rust 2024. |
@@ -53,7 +53,7 @@ An AI project should be able to:
 9. **Expire** stale memories with TTL and optional decay scores.
 10. Expose an **excellent Rust API** first; a server and Python bindings after the engine is real.
 
-Day 1 delivers (1)–(5) and (8), plus the data fields needed by (6), (7), and (9). Day 2 delivers subtree filters, path globs, and DFS interval numbers so (6) can scope vector search without walking the child lists.
+Day 1 delivers (1)–(5) and (8), plus the data fields needed by (6), (7), and (9). Day 2 delivers subtree filters, path globs, and DFS interval numbers so (6) can scope vector search without walking the child lists. Day 3 delivers the exact, SIMD-friendly half of (6): `search_subtree` for cosine / L2 / dot / L1.
 
 ---
 
@@ -155,7 +155,7 @@ Auto-checkpoint every 256 mutations by default; callers can also call `checkpoin
 | Primary (`NodeId`) | `HashMap` | same, then packed slab |
 | Path | `HashMap<NodePath, NodeId>` | prefix/trie if glob fan-out needs it |
 | Subtree | DFS interval (Euler tour `dfs_in` / `dfs_out`), rebuilt after insert, move, and delete_subtree | packed range / arena |
-| Vector | embedding on node; `search_subtree` + `search_subtree_ann` filtered by Euler interval | SIMD inner-loop + PQ codes; per-hot-subtree HNSW |
+| Vector | embedding on node; `search_subtree` scores the Euler range with SIMD-friendly kernels (bounded k-heap); `search_subtree_ann` still filters shared HNSW by interval | PQ codes; per-hot-subtree HNSW (day 4) |
 
 ---
 
@@ -175,7 +175,7 @@ Auto-checkpoint every 256 mutations by default; callers can also call `checkpoin
 
 **Path globs (day 2):** `tree.glob("/proj/*/memory")` and `tree.glob("/proj/**/memory")`. `*` is one segment, `**` is zero or more. A leading literal prefix is looked up in the path index; only that subtree is matched. A missing prefix returns no hits. A fully literal glob is a single path-index lookup. There is no substring / `*foo*` wildcard.
 
-**Vector (day 2 wiring, SIMD later):** `search_subtree(id, query_vec, k, metric)` scans embeddings in the Euler range of `id` using `DistanceMetric`. `search_subtree_ann` searches the shared `HnswIndex` and keeps hits whose interval is nested in that root. Auto-vectorized inner loops and per-subtree graphs are later days.
+**Vector (day 3 exact, day 4 ANN):** `search_subtree(id, query_vec, k, metric)` scores embeddings in the Euler range of `id` with auto-vectorized cosine / L2 / dot / L1 kernels (`QueryKernel` reuses `||q||` for cosine). Membership is the `dfs_in` range — child lists are not walked. A k-sized max-heap keeps the nearest neighbors; ties break by `NodeId`. Non-finite embeddings are skipped. `search_subtree_ann` still searches the shared `HnswIndex` and keeps hits whose interval is nested in that root. Per-subtree graphs and recall work are day 4. No throughput numbers until Criterion (day 8).
 
 **Roll-ups (later):** a parent may store a `summary`. A pluggable `Rollup` trait produces text (extractive concat first, optional LLM hook). Invalidated on child mutate; refreshed lazily or on `rollup(id)`.
 
@@ -229,7 +229,7 @@ Dates are sequencing, not a calendar promise. Each day should land on `master` w
 |---|---|---|
 | **1** | Core tree + durability + project spine | `MemoryTree` ops, WAL + snapshot, unit + property tests, CI, release workflow, README, `0.1.0-beta.1` |
 | **2** | Subtree query API | Filters by kind/depth/payload, path glob, DFS interval numbers — **done** (`0.2.0-beta.1`) |
-| **3** | Brute-force SIMD vectors | `search_subtree` with cosine / L2 / dot, auto-vectorized inner loop, correctness tests vs scalar |
+| **3** | Brute-force SIMD vectors | `search_subtree` with cosine / L2 / dot / L1, auto-vectorized inner loop, correctness tests vs scalar — **done** (`0.3.0-beta.1`) |
 | **4** | HNSW in a subtree | Incremental insert/delete, recall tests vs brute-force, scoped to Euler interval |
 | **5** | Roll-ups | `Rollup` trait, extractive default, invalidate-on-write, `summary` on parents |
 | **6** | TTL and decay | Sweeper, lazy expiry on read, decay function, tests that expired nodes vanish only after sweep |
@@ -247,7 +247,7 @@ Out of scope for these 15 days: multi-raft replication, sharding, a Mongo compat
 
 ---
 
-## 9. Day-1 / day-2 file map
+## 9. Day-1 / day-2 / day-3 file map
 
 ```
 docs/ARCHITECTURE.md          this file
@@ -260,10 +260,14 @@ src/memory/query.rs           SubtreeQuery builder
 src/memory/wal.rs             TreeOp + adapter over storage::WriteAheadLog
 src/memory/snapshot.rs        atomic snapshot
 src/memory/tree.rs            MemoryTree (ops, Euler intervals, glob, search)
+src/vector/distance.rs        DistanceMetric dispatch
+src/vector/kernels.rs         auto-vectorized f32 inner loops + QueryKernel
+src/vector/scalar.rs          f64 reference kernels (test oracle)
 tests/memory_tree.rs          structural unit tests
 tests/subtree_query.rs        interval / glob / query unit tests
 tests/durability.rs           reopen / torn-tail / query recovery tests
 tests/invariants.rs           proptest (invariants + interval vs walk)
+tests/distance_kernels.rs     SIMD vs scalar kernel agreement
 tests/vector_subtree.rs       subtree-scoped exact + ANN search
 .github/workflows/ci.yml
 .github/workflows/release.yml
@@ -273,10 +277,11 @@ Euler intervals are derived state on `MemoryTree` (`DfsInterval` + a `dfs_in` ra
 
 ---
 
-## 10. Non-goals for day 2
+## 10. Non-goals for day 3
 
 - Network protocol and CLI against the tree (the old TCP server binary still boots the document sketch).
-- SIMD inner-loop vector kernels and recall numbers (day 3–4).
+- HNSW recall, incremental ANN, and per-subtree graphs (day 4).
 - Background roll-up / TTL threads.
-- Benchmark claims. Interval membership is O(1); no throughput numbers are published.
+- Benchmark claims. Kernels are written so LLVM can auto-vectorize; no throughput numbers are published until Criterion (day 8).
 - Multi-threaded writers.
+- Nightly `std::simd` or architecture-specific intrinsics. The portable 8-lane f32 loops are the day-3 kernel.
