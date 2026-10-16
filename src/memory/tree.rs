@@ -538,7 +538,27 @@ impl MemoryTree {
         Ok(hits)
     }
 
-    /// Approximate k-NN via the shared [`HnswIndex`], then keep hits in `root`'s subtree.
+    /// When a subtree has this many indexable embeddings or fewer, ANN falls
+    /// back to exact [`search_subtree`]. 64 is cheap for the SIMD scan and
+    /// avoids filter-misses on tiny scopes.
+    const ANN_EXACT_LIMIT: usize = 64;
+
+    /// Approximate k-NN over embeddings in `root`'s Euler interval.
+    ///
+    /// The shared [`HnswIndex`] is keyed by [`NodeId`] and uses cosine
+    /// (the index metric). Strategy:
+    ///
+    /// 1. `k == 0` → empty (same as [`search_subtree`]).
+    /// 2. Count finite embeddings in the interval; a dimension mismatch is
+    ///    an error, matching the exact path.
+    /// 3. If that count is `<= ANN_EXACT_LIMIT` (or `<= k`) **or** the
+    ///    subtree is a small fraction of the live index (`8 * n_sub <
+    ///    n_index`), fall back to exact cosine k-NN. Small or heavily
+    ///    filtered scopes then still return `k` hits when they exist.
+    /// 4. Otherwise beam-search HNSW with `ef = max(ef_search, k * widen)`
+    ///    where `widen = (n_index / n_sub).clamp(2, 64)`, keep hits whose
+    ///    interval is nested in `root`, and rank by `(distance, NodeId)`.
+    /// 5. If fewer than `min(k, n_sub)` hits remain, fall back to exact.
     pub fn search_subtree_ann(
         &self,
         root: NodeId,
@@ -549,25 +569,66 @@ impl MemoryTree {
             return Ok(Vec::new());
         }
         let iv = self.interval(root)?;
-        let fetch = k.saturating_mul(8).max(k);
-        Ok(self
+        let n_sub = self.subtree_indexable_count(iv, query.len())?;
+        if n_sub == 0 {
+            return Ok(Vec::new());
+        }
+        if self.ann_use_exact(n_sub, k) {
+            return self.search_subtree(root, query, k, self.hnsw.metric());
+        }
+        let n_index = self.hnsw.len();
+        let widen = (n_index / n_sub).clamp(2, 64);
+        let ef = self.hnsw.ef_search().max(k.saturating_mul(widen));
+        let mut hits: Vec<SearchHit> = self
             .hnsw
-            .search(query, fetch)
-            .into_iter()
-            .filter_map(|hit| {
-                let id = hit.id;
-                let node_iv = self.intervals.get(&id)?;
-                if iv.contains(*node_iv) {
-                    Some(SearchHit {
-                        id,
-                        distance: hit.distance,
-                    })
-                } else {
-                    None
-                }
+            .search_filtered(query, k, ef, |id| {
+                self.intervals.get(id).is_some_and(|niv| iv.contains(*niv))
             })
-            .take(k)
-            .collect())
+            .into_iter()
+            .filter(|h| h.distance.is_finite())
+            .map(|h| SearchHit {
+                id: h.id,
+                distance: h.distance,
+            })
+            .collect();
+        hits.sort_by(|a, b| {
+            a.distance
+                .partial_cmp(&b.distance)
+                .unwrap_or(Ordering::Equal)
+                .then(a.id.cmp(&b.id))
+        });
+        if hits.len() < k.min(n_sub) {
+            return self.search_subtree(root, query, k, self.hnsw.metric());
+        }
+        Ok(hits)
+    }
+
+    fn ann_use_exact(&self, n_sub: usize, k: usize) -> bool {
+        if n_sub <= Self::ANN_EXACT_LIMIT.max(k) {
+            return true;
+        }
+        let n_index = self.hnsw.len();
+        n_index > 0 && n_sub.saturating_mul(8) < n_index
+    }
+
+    /// Count finite embeddings in `iv`. Errors on the first dimension mismatch.
+    fn subtree_indexable_count(&self, iv: DfsInterval, query_dim: usize) -> GraniteResult<usize> {
+        let mut n = 0usize;
+        for node in self.nodes_in_interval(iv.dfs_in, iv.dfs_out) {
+            let Some(emb) = node.payload.embedding.as_deref() else {
+                continue;
+            };
+            if emb.len() != query_dim {
+                return Err(GraniteError::VectorDimensionMismatch {
+                    expected: query_dim,
+                    actual: emb.len(),
+                });
+            }
+            if emb.iter().copied().all(f32::is_finite) {
+                n += 1;
+            }
+        }
+        Ok(n)
     }
 
     /// Preorder walk from root.
