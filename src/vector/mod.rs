@@ -9,6 +9,7 @@
 pub mod distance;
 pub mod embedding;
 pub mod hnsw;
+pub mod kernels;
 pub mod quantizer;
 pub mod scalar;
 pub mod vector_index;
