@@ -10,7 +10,8 @@ use crate::vector::distance::DistanceMetric;
 use crate::vector::hnsw::{HnswConfig, HnswIndex};
 use crate::vector::kernels::QueryKernel;
 use chrono::Utc;
-use std::collections::{BTreeMap, HashMap};
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BinaryHeap, HashMap};
 use std::path::{Path, PathBuf};
 
 /// Euler-tour enter/leave times for one node.
@@ -39,6 +40,36 @@ impl DfsInterval {
 pub struct SearchHit {
     pub id: NodeId,
     pub distance: f32,
+}
+
+/// Max-heap entry for exact k-NN: worst (largest distance, then largest id) on top.
+#[derive(Clone, Copy, Debug)]
+struct HeapHit {
+    distance: f32,
+    id: NodeId,
+}
+
+impl PartialEq for HeapHit {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for HeapHit {}
+
+impl PartialOrd for HeapHit {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for HeapHit {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.distance
+            .partial_cmp(&other.distance)
+            .unwrap_or(Ordering::Equal)
+            .then(self.id.cmp(&other.id))
+    }
 }
 
 /// Options for opening a durable [`MemoryTree`].
@@ -455,7 +486,7 @@ impl MemoryTree {
         }
         let iv = self.interval(root)?;
         let kernel = QueryKernel::new(metric, query);
-        let mut hits = Vec::new();
+        let mut heap: BinaryHeap<HeapHit> = BinaryHeap::with_capacity(k);
         for node in self.nodes_in_interval(iv.dfs_in, iv.dfs_out) {
             let Some(emb) = node.payload.embedding.as_deref() else {
                 continue;
@@ -473,18 +504,30 @@ impl MemoryTree {
             if !distance.is_finite() {
                 continue;
             }
-            hits.push(SearchHit {
+            let hit = HeapHit {
                 id: node.id,
                 distance,
-            });
+            };
+            if heap.len() < k {
+                heap.push(hit);
+            } else if heap.peek().is_some_and(|worst| hit < *worst) {
+                heap.pop();
+                heap.push(hit);
+            }
         }
+        let mut hits: Vec<SearchHit> = heap
+            .into_iter()
+            .map(|h| SearchHit {
+                id: h.id,
+                distance: h.distance,
+            })
+            .collect();
         hits.sort_by(|a, b| {
             a.distance
                 .partial_cmp(&b.distance)
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .unwrap_or(Ordering::Equal)
                 .then(a.id.cmp(&b.id))
         });
-        hits.truncate(k);
         Ok(hits)
     }
 
