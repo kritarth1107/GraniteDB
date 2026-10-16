@@ -114,6 +114,15 @@ impl TreeOpenOptions {
 }
 
 /// An in-memory tree of memory nodes, optionally backed by a WAL + snapshot.
+///
+/// Parent [`Node::summary`] values are a cache produced by the tree's
+/// [`Rollup`]. Lazy computes are not WAL records. Snapshots include
+/// whatever is on the node at checkpoint time; on open, a stored
+/// `Some(summary)` is treated as fresh and WAL replay of descendant
+/// writes invalidates the ancestor chain. Reopen therefore agrees with
+/// a live tree for the default extractive summarizer. A custom [`Rollup`]
+/// is process-local and must be reinstalled with [`MemoryTree::set_rollup`]
+/// after open.
 pub struct MemoryTree {
     nodes: HashMap<NodeId, Node>,
     path_index: HashMap<NodePath, NodeId>,
@@ -220,6 +229,8 @@ impl MemoryTree {
         // live embeddings in NodeId order so snapshot+WAL reopen is consistent.
         tree.rebuild_hnsw();
         tree.maintain_hnsw = true;
+        // Snapshot restore already marked stored summaries fresh; WAL replay
+        // of insert/update/move/delete cleared ancestors of mutated nodes.
         Ok(tree)
     }
 
@@ -237,7 +248,19 @@ impl MemoryTree {
             ));
         }
         self.rebuild_intervals();
+        self.rebuild_summary_fresh();
         Ok(())
+    }
+
+    /// Treat snapshotted `Some(summary)` values as a warm cache. `None`
+    /// stays cold so the next [`MemoryTree::summary`] call computes it.
+    fn rebuild_summary_fresh(&mut self) {
+        self.summary_fresh.clear();
+        for (id, node) in &self.nodes {
+            if node.summary.is_some() {
+                self.summary_fresh.insert(*id);
+            }
+        }
     }
 
     /// Root node id (always present).
@@ -453,7 +476,9 @@ impl MemoryTree {
     ///
     /// The result is stored on [`Node::summary`] in memory only; lazy
     /// computes are not WAL records. Call [`MemoryTree::checkpoint`] to
-    /// persist whatever is currently cached.
+    /// persist whatever is currently cached. On reopen, a snapshotted
+    /// `Some(summary)` is served until a descendant write invalidates it;
+    /// `None` is recomputed with the default extractive [`Rollup`].
     pub fn summary(&mut self, id: NodeId) -> GraniteResult<Option<&str>> {
         self.refresh_summary(id)?;
         Ok(self.nodes.get(&id).and_then(|n| n.summary.as_deref()))
