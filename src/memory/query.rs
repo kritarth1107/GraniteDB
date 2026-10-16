@@ -8,7 +8,15 @@ use super::id::NodeId;
 use super::node::{Node, NodeKind};
 use super::tree::MemoryTree;
 use crate::error::GraniteResult;
+use serde_json::Value;
 use std::collections::HashSet;
+
+#[derive(Clone, Debug)]
+enum PayloadPred {
+    Eq { field: String, value: Value },
+    Exists { field: String },
+    Contains { field: String, needle: String },
+}
 
 /// Builder that selects nodes under a subtree root.
 pub struct SubtreeQuery<'a> {
@@ -17,6 +25,7 @@ pub struct SubtreeQuery<'a> {
     kinds: Option<HashSet<NodeKind>>,
     min_depth: Option<usize>,
     max_depth: Option<usize>,
+    predicates: Vec<PayloadPred>,
 }
 
 impl<'a> SubtreeQuery<'a> {
@@ -27,6 +36,7 @@ impl<'a> SubtreeQuery<'a> {
             kinds: None,
             min_depth: None,
             max_depth: None,
+            predicates: Vec::new(),
         }
     }
 
@@ -68,6 +78,36 @@ impl<'a> SubtreeQuery<'a> {
         self.min_depth(depth).max_depth(depth)
     }
 
+    /// Keep nodes whose JSON payload field equals `value`.
+    ///
+    /// `field` is a `.`-separated object path (`text`, `meta.role`).
+    pub fn payload_eq(mut self, field: impl Into<String>, value: Value) -> Self {
+        self.predicates.push(PayloadPred::Eq {
+            field: field.into(),
+            value,
+        });
+        self
+    }
+
+    /// Keep nodes that have `field` in their JSON payload (including `null`).
+    pub fn payload_exists(mut self, field: impl Into<String>) -> Self {
+        self.predicates.push(PayloadPred::Exists {
+            field: field.into(),
+        });
+        self
+    }
+
+    /// Keep nodes whose string payload field contains `needle`.
+    ///
+    /// Non-string fields do not match. Comparison is case-sensitive.
+    pub fn payload_contains(mut self, field: impl Into<String>, needle: impl Into<String>) -> Self {
+        self.predicates.push(PayloadPred::Contains {
+            field: field.into(),
+            needle: needle.into(),
+        });
+        self
+    }
+
     /// Nodes in the subtree that pass the current filters, in `dfs_in` order.
     pub fn collect(self) -> GraniteResult<Vec<&'a Node>> {
         let root = self.tree.get(self.root)?;
@@ -96,6 +136,35 @@ impl<'a> SubtreeQuery<'a> {
                 return false;
             }
         }
-        true
+        self.predicates
+            .iter()
+            .all(|pred| pred.matches(&node.payload.data))
     }
+}
+
+impl PayloadPred {
+    fn matches(&self, data: &Value) -> bool {
+        match self {
+            Self::Eq { field, value } => lookup_field(data, field) == Some(value),
+            Self::Exists { field } => lookup_field(data, field).is_some(),
+            Self::Contains { field, needle } => lookup_field(data, field)
+                .and_then(Value::as_str)
+                .is_some_and(|s| s.contains(needle.as_str())),
+        }
+    }
+}
+
+/// Walk a `.`-separated object path. Empty segments do not match.
+fn lookup_field<'a>(value: &'a Value, field: &str) -> Option<&'a Value> {
+    if field.is_empty() {
+        return None;
+    }
+    let mut cur = value;
+    for part in field.split('.') {
+        if part.is_empty() {
+            return None;
+        }
+        cur = cur.get(part)?;
+    }
+    Some(cur)
 }
