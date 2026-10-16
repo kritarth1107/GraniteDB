@@ -308,3 +308,86 @@ fn move_updates_euler_scope_for_exact_search() {
         .unwrap();
     assert!(left_hits.iter().all(|h| h.id != moving));
 }
+
+/// SplitMix64 so recall tests are reproducible without extra crates.
+struct SeedRng(u64);
+
+impl SeedRng {
+    fn from_seed(seed: u64) -> Self {
+        Self(seed)
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E3779B97F4A7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+        z ^ (z >> 31)
+    }
+
+    fn next_f32(&mut self) -> f32 {
+        (self.next_u64() >> 40) as f32 / (1u32 << 24) as f32
+    }
+
+    fn vec(&mut self, dim: usize) -> Vec<f32> {
+        (0..dim).map(|_| self.next_f32() * 2.0 - 1.0).collect()
+    }
+}
+
+fn recall_at_k(got: &[SearchHit], expect: &[SearchHit]) -> f64 {
+    if expect.is_empty() {
+        return 1.0;
+    }
+    let got_ids: std::collections::HashSet<_> = got.iter().map(|h| h.id).collect();
+    expect.iter().filter(|h| got_ids.contains(&h.id)).count() as f64 / expect.len() as f64
+}
+
+/// 96 unit-ish vectors, dim 16: large enough that ANN does not fall back
+/// to exact (`ANN_EXACT_LIMIT` is 64). Seeded queries vs `search_subtree`.
+#[test]
+fn ann_recall_at_k_against_brute_force() {
+    const DIM: usize = 16;
+    const N: usize = 96;
+    const K: usize = 10;
+    const QUERIES: usize = 12;
+    // Honest floor: this seed and layout measured well above 0.90 on the
+    // ANN path (no exact fallback). Do not raise it without re-measuring.
+    const MIN_MEAN_RECALL: f64 = 0.90;
+    const MIN_QUERY_RECALL: f64 = 0.70;
+
+    let mut rng = SeedRng::from_seed(0x0D40_4A11);
+    let mut tree = MemoryTree::ephemeral();
+    let root = tree.root_id();
+    for i in 0..N {
+        let v = rng.vec(DIM);
+        tree.insert_with(root, embed(&format!("v{i}"), v)).unwrap();
+    }
+    assert!(
+        tree.vector_index_len() >= N,
+        "HNSW should hold every finite embedding"
+    );
+
+    let mut sum = 0.0;
+    for q in 0..QUERIES {
+        let query = rng.vec(DIM);
+        let exact = tree
+            .search_subtree(root, &query, K, DistanceMetric::Cosine)
+            .unwrap();
+        let ann = tree.search_subtree_ann(root, &query, K).unwrap();
+        assert_eq!(exact.len(), K, "query {q} exact");
+        assert_eq!(ann.len(), K, "query {q} ann");
+        let r = recall_at_k(&ann, &exact);
+        assert!(
+            r + 1e-9 >= MIN_QUERY_RECALL,
+            "query {q} recall {r} < {MIN_QUERY_RECALL}; exact={:?} ann={:?}",
+            exact.iter().map(|h| h.id).collect::<Vec<_>>(),
+            ann.iter().map(|h| h.id).collect::<Vec<_>>()
+        );
+        sum += r;
+    }
+    let mean = sum / QUERIES as f64;
+    assert!(
+        mean + 1e-9 >= MIN_MEAN_RECALL,
+        "mean recall@{K} {mean} < {MIN_MEAN_RECALL}"
+    );
+}
