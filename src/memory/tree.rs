@@ -491,12 +491,21 @@ impl MemoryTree {
         self.rollup.summarize(&view)
     }
 
-    /// Drop the cached summary of `id` (the parent of a write). Does not
-    /// walk ancestors; that is a later step.
+    /// Drop the cached summary of `id`.
     fn invalidate_summary(&mut self, id: NodeId) {
         self.summary_fresh.remove(&id);
         if let Some(node) = self.nodes.get_mut(&id) {
             node.summary = None;
+        }
+    }
+
+    /// Drop cached summaries of `id` and every ancestor, including root.
+    fn invalidate_summaries_from(&mut self, id: NodeId) {
+        let mut current = Some(id);
+        while let Some(nid) = current {
+            let parent = self.nodes.get(&nid).and_then(|n| n.parent_id);
+            self.invalidate_summary(nid);
+            current = parent;
         }
     }
 
@@ -1140,7 +1149,7 @@ impl MemoryTree {
                 let embedding = self.nodes.get(id).and_then(|n| n.payload.embedding.clone());
                 self.hnsw_upsert(*id, embedding.as_deref());
                 if let Some(parent_id) = self.nodes.get(id).and_then(|n| n.parent_id) {
-                    self.invalidate_summary(parent_id);
+                    self.invalidate_summaries_from(parent_id);
                 }
                 Ok(())
             }
@@ -1182,7 +1191,7 @@ impl MemoryTree {
         }
         self.hnsw_upsert(id, embedding.as_deref());
         self.rebuild_intervals();
-        self.invalidate_summary(parent_id);
+        self.invalidate_summaries_from(parent_id);
         Ok(())
     }
 
@@ -1214,8 +1223,8 @@ impl MemoryTree {
         }
         self.repath_subtree(id)?;
         self.rebuild_intervals();
-        self.invalidate_summary(old_parent);
-        self.invalidate_summary(new_parent);
+        self.invalidate_summaries_from(old_parent);
+        self.invalidate_summaries_from(new_parent);
         Ok(())
     }
 
@@ -1232,7 +1241,7 @@ impl MemoryTree {
         }
         self.repath_subtree(id)?;
         if let Some(parent_id) = parent_id {
-            self.invalidate_summary(parent_id);
+            self.invalidate_summaries_from(parent_id);
         }
         Ok(())
     }
@@ -1260,7 +1269,7 @@ impl MemoryTree {
             self.hnsw.compact_if_needed();
         }
         self.rebuild_intervals();
-        self.invalidate_summary(parent_id);
+        self.invalidate_summaries_from(parent_id);
         Ok(())
     }
 
