@@ -26,6 +26,8 @@ pub struct SubtreeQuery<'a> {
     min_depth: Option<usize>,
     max_depth: Option<usize>,
     predicates: Vec<PayloadPred>,
+    most_recent: Option<usize>,
+    limit: Option<usize>,
 }
 
 impl<'a> SubtreeQuery<'a> {
@@ -37,6 +39,8 @@ impl<'a> SubtreeQuery<'a> {
             min_depth: None,
             max_depth: None,
             predicates: Vec::new(),
+            most_recent: None,
+            limit: None,
         }
     }
 
@@ -108,15 +112,44 @@ impl<'a> SubtreeQuery<'a> {
         self
     }
 
-    /// Nodes in the subtree that pass the current filters, in `dfs_in` order.
+    /// Keep the `n` nodes with the latest `updated_at` after other filters.
+    ///
+    /// Ties break by `NodeId`. The result is newest-first. `n == 0` is empty.
+    pub fn most_recent(mut self, n: usize) -> Self {
+        self.most_recent = Some(n);
+        self
+    }
+
+    /// Cap the result at `n` nodes (applied after [`Self::most_recent`]).
+    pub fn limit(mut self, n: usize) -> Self {
+        self.limit = Some(n);
+        self
+    }
+
+    /// Nodes in the subtree that pass the current filters.
+    ///
+    /// Order is Euler-tour (`dfs_in` / preorder) unless [`Self::most_recent`]
+    /// is set, in which case the hits are newest-`updated_at` first.
     pub fn collect(self) -> GraniteResult<Vec<&'a Node>> {
         let root = self.tree.get(self.root)?;
         let root_depth = root.depth();
-        Ok(self
+        let mut hits: Vec<&'a Node> = self
             .tree
             .subtree(self.root)?
             .filter(|node| self.matches(node, root_depth))
-            .collect())
+            .collect();
+        if let Some(n) = self.most_recent {
+            hits.sort_by(|a, b| {
+                b.updated_at
+                    .cmp(&a.updated_at)
+                    .then_with(|| a.id.cmp(&b.id))
+            });
+            hits.truncate(n);
+        }
+        if let Some(n) = self.limit {
+            hits.truncate(n);
+        }
+        Ok(hits)
     }
 
     fn matches(&self, node: &Node, root_depth: usize) -> bool {
