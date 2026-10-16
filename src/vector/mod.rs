@@ -10,6 +10,7 @@ pub mod distance;
 pub mod embedding;
 pub mod hnsw;
 pub mod quantizer;
+pub mod scalar;
 pub mod vector_index;
 
 pub use distance::DistanceMetric;
