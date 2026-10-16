@@ -123,7 +123,9 @@ pub struct MemoryTree {
     root_id: NodeId,
     next_id: u64,
     wal: Option<TreeWal>,
-    hnsw: HnswIndex,
+    hnsw: HnswIndex<NodeId>,
+    /// When false, mutations skip the live HNSW and a rebuild follows (open/replay).
+    maintain_hnsw: bool,
     data_dir: Option<PathBuf>,
     ops_since_checkpoint: u64,
     auto_checkpoint_every: Option<u64>,
@@ -150,6 +152,7 @@ impl MemoryTree {
             next_id: 1,
             wal: None,
             hnsw: HnswIndex::new(HnswConfig::default()),
+            maintain_hnsw: true,
             data_dir: None,
             ops_since_checkpoint: 0,
             auto_checkpoint_every: None,
@@ -186,6 +189,7 @@ impl MemoryTree {
         let mut tree = Self::empty();
         tree.data_dir = Some(dir.to_path_buf());
         tree.auto_checkpoint_every = opts.auto_checkpoint_every;
+        tree.maintain_hnsw = false;
 
         let mut restored_lsn = 0u64;
         if let Some(snap) = snapshot::load(dir)? {
@@ -204,7 +208,10 @@ impl MemoryTree {
 
         wal.set_current_lsn(restored_lsn);
         tree.wal = Some(wal);
+        // Replay applied tree ops without touching HNSW; rebuild once from
+        // live embeddings in NodeId order so snapshot+WAL reopen is consistent.
         tree.rebuild_hnsw();
+        tree.maintain_hnsw = true;
         Ok(tree)
     }
 
@@ -548,7 +555,7 @@ impl MemoryTree {
             .search(query, fetch)
             .into_iter()
             .filter_map(|hit| {
-                let id = NodeId::from_raw(hit.id.parse::<u64>().ok()?);
+                let id = hit.id;
                 let node_iv = self.intervals.get(&id)?;
                 if iv.contains(*node_iv) {
                     Some(SearchHit {
@@ -669,6 +676,38 @@ impl MemoryTree {
             return Err(GraniteError::Internal("cycle detected".into()));
         }
         self.validate_intervals()?;
+        self.validate_hnsw()?;
+        Ok(())
+    }
+
+    fn validate_hnsw(&self) -> GraniteResult<()> {
+        let dim = self.hnsw.dimensions();
+        let mut expected = 0usize;
+        for (id, node) in &self.nodes {
+            let indexable = node.payload.embedding.as_deref().is_some_and(|emb| {
+                !emb.is_empty()
+                    && emb.iter().copied().all(f32::is_finite)
+                    && (dim == 0 || emb.len() == dim)
+            });
+            if indexable {
+                expected += 1;
+                if !self.hnsw.contains(id) {
+                    return Err(GraniteError::Internal(format!(
+                        "{id} embedding missing from HNSW"
+                    )));
+                }
+            } else if self.hnsw.contains(id) {
+                return Err(GraniteError::Internal(format!(
+                    "{id} is in HNSW without an indexable embedding"
+                )));
+            }
+        }
+        if self.hnsw.len() != expected {
+            return Err(GraniteError::Internal(format!(
+                "HNSW live count {} != expected {expected}",
+                self.hnsw.len()
+            )));
+        }
         Ok(())
     }
 
@@ -1041,8 +1080,13 @@ impl MemoryTree {
         for rid in ids {
             if let Some(node) = self.nodes.remove(&rid) {
                 self.path_index.remove(&node.path);
-                self.hnsw.remove(&rid.to_string());
+                if self.maintain_hnsw {
+                    self.hnsw.remove(&rid);
+                }
             }
+        }
+        if self.maintain_hnsw {
+            self.hnsw.compact_if_needed();
         }
         self.rebuild_intervals();
         Ok(())
@@ -1079,29 +1123,39 @@ impl MemoryTree {
 
     fn rebuild_hnsw(&mut self) {
         self.hnsw = HnswIndex::new(HnswConfig::default());
-        let pairs: Vec<(NodeId, Vec<f32>)> = self
+        let mut pairs: Vec<(NodeId, Vec<f32>)> = self
             .nodes
             .iter()
             .filter_map(|(id, node)| {
-                node.payload
-                    .embedding
-                    .as_ref()
-                    .map(|emb| (*id, emb.clone()))
+                let emb = node.payload.embedding.as_ref()?;
+                if emb.is_empty() || !emb.iter().copied().all(f32::is_finite) {
+                    return None;
+                }
+                Some((*id, emb.clone()))
             })
             .collect();
+        pairs.sort_by_key(|(id, _)| *id);
         for (id, emb) in pairs {
-            self.hnsw.insert(id.to_string(), emb);
+            self.hnsw.insert(id, emb);
         }
     }
 
     fn hnsw_upsert(&mut self, id: NodeId, embedding: Option<&[f32]>) {
-        let key = id.to_string();
-        self.hnsw.remove(&key);
-        if let Some(emb) = embedding {
-            if !emb.is_empty() {
-                self.hnsw.insert(key, emb.to_vec());
+        if !self.maintain_hnsw {
+            return;
+        }
+        match embedding {
+            Some(emb) => self.hnsw.upsert(id, emb.to_vec()),
+            None => {
+                self.hnsw.remove(&id);
+                self.hnsw.compact_if_needed();
             }
         }
+    }
+
+    /// Live embeddings currently in the HNSW graph.
+    pub fn vector_index_len(&self) -> usize {
+        self.hnsw.len()
     }
 }
 

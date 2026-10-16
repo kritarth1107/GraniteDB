@@ -573,6 +573,9 @@ where
                 .map(|i| self.nodes[i].max_layer)
                 .unwrap_or(0);
         }
+        if self.id_to_node.is_empty() {
+            self.config.dimensions = 0;
+        }
         true
     }
 
@@ -601,7 +604,10 @@ where
             .iter()
             .filter_map(|n| n.id.clone().map(|id| (id, n.vector.clone())))
             .collect();
-        let config = self.config.clone();
+        let mut config = self.config.clone();
+        if live.is_empty() {
+            config.dimensions = 0;
+        }
         *self = Self::new(config);
         for (id, vector) in live {
             self.insert(id, vector);
