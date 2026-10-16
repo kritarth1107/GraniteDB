@@ -19,5 +19,5 @@ pub use id::NodeId;
 pub use node::{Node, NodeKind, NodeSpec, Payload};
 pub use path::NodePath;
 pub use query::SubtreeQuery;
-pub use rollup::{Rollup, RollupView};
+pub use rollup::{ExtractiveRollup, Rollup, RollupView, extract_payload_text};
 pub use tree::{DfsInterval, MemoryTree, SearchHit, SubtreeIter, TreeOpenOptions};
