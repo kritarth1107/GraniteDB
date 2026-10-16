@@ -9,7 +9,7 @@ use crate::error::{GraniteError, GraniteResult};
 use crate::vector::distance::DistanceMetric;
 use crate::vector::hnsw::{HnswConfig, HnswIndex};
 use chrono::Utc;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 /// Euler-tour enter/leave times for one node.
@@ -446,9 +446,9 @@ impl MemoryTree {
         if k == 0 {
             return Ok(Vec::new());
         }
-        let _ = self.get(root)?;
+        let iv = self.interval(root)?;
         let mut hits = Vec::new();
-        for node in self.subtree(root)? {
+        for node in self.nodes_in_interval(iv.dfs_in, iv.dfs_out) {
             let Some(emb) = node.payload.embedding.as_deref() else {
                 continue;
             };
@@ -482,20 +482,25 @@ impl MemoryTree {
         if k == 0 {
             return Ok(Vec::new());
         }
-        let members: HashSet<String> = self.subtree(root)?.map(|n| n.id.to_string()).collect();
+        let iv = self.interval(root)?;
         let fetch = k.saturating_mul(8).max(k);
         Ok(self
             .hnsw
             .search(query, fetch)
             .into_iter()
-            .filter(|hit| members.contains(&hit.doc_id))
-            .take(k)
             .filter_map(|hit| {
-                hit.doc_id.parse::<u64>().ok().map(|raw| SearchHit {
-                    id: NodeId::from_raw(raw),
-                    distance: hit.distance,
-                })
+                let id = NodeId::from_raw(hit.doc_id.parse::<u64>().ok()?);
+                let node_iv = self.intervals.get(&id)?;
+                if iv.contains(*node_iv) {
+                    Some(SearchHit {
+                        id,
+                        distance: hit.distance,
+                    })
+                } else {
+                    None
+                }
             })
+            .take(k)
             .collect())
     }
 
@@ -690,6 +695,12 @@ impl MemoryTree {
             }
         }
         false
+    }
+
+    fn nodes_in_interval(&self, lo: u32, hi: u32) -> impl Iterator<Item = &Node> {
+        self.interval_index
+            .range(lo..=hi)
+            .filter_map(|(_, id)| self.nodes.get(id))
     }
 
     fn subtree_ids(&self, id: NodeId) -> Vec<NodeId> {
