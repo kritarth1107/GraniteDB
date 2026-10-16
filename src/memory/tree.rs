@@ -1,3 +1,4 @@
+use super::glob::PathGlob;
 use super::id::NodeId;
 use super::node::{Node, NodeKind, NodeSpec, Payload};
 use super::path::NodePath;
@@ -250,6 +251,38 @@ impl MemoryTree {
         let outer = self.interval(root)?;
         let inner = self.interval(id)?;
         Ok(outer.contains(inner))
+    }
+
+    /// Nodes whose path matches `pattern` (`*` one segment, `**` zero or more).
+    ///
+    /// When the pattern has a leading literal prefix that exists in the path
+    /// index, only that subtree is considered. A missing prefix yields no
+    /// hits. A fully literal pattern is a single path-index lookup.
+    pub fn glob(&self, pattern: &str) -> GraniteResult<Vec<&Node>> {
+        self.glob_path(&PathGlob::parse(pattern)?)
+    }
+
+    /// Same as [`MemoryTree::glob`] for an already-parsed pattern.
+    pub fn glob_path(&self, glob: &PathGlob) -> GraniteResult<Vec<&Node>> {
+        let prefix = glob.literal_prefix();
+        if glob.is_literal() {
+            return match self.path_index.get(&prefix) {
+                Some(id) => self.get(*id).map(|n| vec![n]),
+                None => Ok(Vec::new()),
+            };
+        }
+        let start = if prefix.is_root() {
+            self.root_id
+        } else {
+            match self.path_index.get(&prefix).copied() {
+                Some(id) => id,
+                None => return Ok(Vec::new()),
+            }
+        };
+        Ok(self
+            .subtree(start)?
+            .filter(|node| glob.matches(&node.path))
+            .collect())
     }
 
     /// Insert `name` under `parent` with the given payload (kind = Memory).
