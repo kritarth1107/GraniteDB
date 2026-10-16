@@ -53,7 +53,7 @@ An AI project should be able to:
 9. **Expire** stale memories with TTL and optional decay scores.
 10. Expose an **excellent Rust API** first; a server and Python bindings after the engine is real.
 
-Day 1 delivers (1)–(5) and (8), plus the data fields needed by (6), (7), and (9).
+Day 1 delivers (1)–(5) and (8), plus the data fields needed by (6), (7), and (9). Day 2 delivers subtree filters, path globs, and DFS interval numbers so (6) can scope vector search without walking the child lists.
 
 ---
 
@@ -150,12 +150,12 @@ Auto-checkpoint every 256 mutations by default; callers can also call `checkpoin
 
 ### 4.3 Indexes (roadmap)
 
-| Index | Day 1 | Later |
+| Index | Day 2 | Later |
 |---|---|---|
 | Primary (`NodeId`) | `HashMap` | same, then packed slab |
-| Path | `HashMap<NodePath, NodeId>` | prefix/trie for glob |
-| Subtree | walk child lists | DFS interval (Euler tour `in`/`out`) so “is in subtree?” is O(1) and range scans work |
-| Vector | embedding on node; `search_subtree` + `search_subtree_ann` | SIMD inner-loop + PQ codes; per-hot-subtree HNSW |
+| Path | `HashMap<NodePath, NodeId>` | prefix/trie if glob fan-out needs it |
+| Subtree | DFS interval (Euler tour `dfs_in` / `dfs_out`), rebuilt after insert, move, and delete_subtree | packed range / arena |
+| Vector | embedding on node; `search_subtree` + `search_subtree_ann` filtered by Euler interval | SIMD inner-loop + PQ codes; per-hot-subtree HNSW |
 
 ---
 
@@ -163,9 +163,19 @@ Auto-checkpoint every 256 mutations by default; callers can also call `checkpoin
 
 **Structural (day 1):** `get`, `get_by_path`, `children`, `ancestors`, `subtree` (preorder iterator).
 
-**Later structural:** path globs (`/proj/**/memory`), filter by `kind`, depth bounds, payload predicates, “recent N in this subtree”.
+**Subtree query (day 2):** `MemoryTree::query(root)` returns a [`SubtreeQuery`] builder over the Euler interval of `root`. Filters:
 
-**Vector (later):** `search_subtree(id, query_vec, k, metric)` — first exact inner-loop SIMD (dot / L2 / cosine), then HNSW built from the same embeddings, still *scoped to a subtree* (filter by Euler interval or per-subtree graphs).
+- `kind` / `kinds` — keep those `NodeKind` values (OR)
+- `min_depth` / `max_depth` / `depth` — inclusive bounds relative to the subtree root (the root itself is depth 0)
+- `payload_eq` / `payload_exists` / `payload_contains` — JSON object paths (`text`, `meta.role`); predicates AND; `contains` is case-sensitive and only matches string fields
+- `most_recent(n)` — after other filters, keep the `n` latest `updated_at` (newest first; ties break by `NodeId`)
+- `limit(n)` — cap the result after recency
+
+`collect()` returns `&Node` in `dfs_in` / preorder order unless `most_recent` is set.
+
+**Path globs (day 2):** `tree.glob("/proj/*/memory")` and `tree.glob("/proj/**/memory")`. `*` is one segment, `**` is zero or more. A leading literal prefix is looked up in the path index; only that subtree is matched. A missing prefix returns no hits. A fully literal glob is a single path-index lookup. There is no substring / `*foo*` wildcard.
+
+**Vector (day 2 wiring, SIMD later):** `search_subtree(id, query_vec, k, metric)` scans embeddings in the Euler range of `id` using `DistanceMetric`. `search_subtree_ann` searches the shared `HnswIndex` and keeps hits whose interval is nested in that root. Auto-vectorized inner loops and per-subtree graphs are later days.
 
 **Roll-ups (later):** a parent may store a `summary`. A pluggable `Rollup` trait produces text (extractive concat first, optional LLM hook). Invalidated on child mutate; refreshed lazily or on `rollup(id)`.
 
@@ -183,6 +193,16 @@ tree.insert(project, "note", Payload::text("hello"))?;
 tree.move_node(note_id, other_parent)?;
 tree.delete_subtree(session_id)?;
 for node in tree.subtree(project)? { /* … */ }
+
+let recent = tree
+    .query(project)?
+    .kind(NodeKind::Memory)
+    .payload_contains("text", "hello")
+    .most_recent(8)
+    .collect()?;
+let globbed = tree.glob("/agent/**/note")?;
+assert!(tree.in_subtree(project, recent[0].id)?);
+
 tree.checkpoint()?;
 ```
 
@@ -208,7 +228,7 @@ Dates are sequencing, not a calendar promise. Each day should land on `master` w
 | Day | Theme | Deliverable |
 |---|---|---|
 | **1** | Core tree + durability + project spine | `MemoryTree` ops, WAL + snapshot, unit + property tests, CI, release workflow, README, `0.1.0-beta.1` |
-| **2** | Subtree query API | Filters by kind/depth/payload, path glob, DFS interval numbers |
+| **2** | Subtree query API | Filters by kind/depth/payload, path glob, DFS interval numbers — **done** (`0.2.0-beta.1`) |
 | **3** | Brute-force SIMD vectors | `search_subtree` with cosine / L2 / dot, auto-vectorized inner loop, correctness tests vs scalar |
 | **4** | HNSW in a subtree | Incremental insert/delete, recall tests vs brute-force, scoped to Euler interval |
 | **5** | Roll-ups | `Rollup` trait, extractive default, invalidate-on-write, `summary` on parents |
@@ -227,30 +247,36 @@ Out of scope for these 15 days: multi-raft replication, sharding, a Mongo compat
 
 ---
 
-## 9. Day-1 file map
+## 9. Day-1 / day-2 file map
 
 ```
 docs/ARCHITECTURE.md          this file
 src/memory/mod.rs             module root
 src/memory/id.rs              NodeId
 src/memory/path.rs            NodePath
+src/memory/glob.rs            PathGlob (`*` / `**`)
 src/memory/node.rs            Node, NodeKind, Payload, NodeSpec
+src/memory/query.rs           SubtreeQuery builder
 src/memory/wal.rs             TreeOp + adapter over storage::WriteAheadLog
 src/memory/snapshot.rs        atomic snapshot
-src/memory/tree.rs            MemoryTree
-tests/memory_tree.rs          unit tests
-tests/durability.rs           reopen / torn-tail tests
-tests/invariants.rs           proptest
+src/memory/tree.rs            MemoryTree (ops, Euler intervals, glob, search)
+tests/memory_tree.rs          structural unit tests
+tests/subtree_query.rs        interval / glob / query unit tests
+tests/durability.rs           reopen / torn-tail / query recovery tests
+tests/invariants.rs           proptest (invariants + interval vs walk)
+tests/vector_subtree.rs       subtree-scoped exact + ANN search
 .github/workflows/ci.yml
 .github/workflows/release.yml
 ```
 
+Euler intervals are derived state on `MemoryTree` (`DfsInterval` + a `dfs_in` range index). They are not stored on `Node` and are not logged; restore and replay rebuild them from child order. `MemoryTree::validate` checks that stored intervals match a fresh tour, nest in the parent, and do not overlap siblings.
+
 ---
 
-## 10. Non-goals for day 1
+## 10. Non-goals for day 2
 
 - Network protocol and CLI against the tree (the old TCP server binary still boots the document sketch).
-- Vector search and HNSW wiring into `MemoryTree`.
+- SIMD inner-loop vector kernels and recall numbers (day 3–4).
 - Background roll-up / TTL threads.
-- Benchmark claims.
+- Benchmark claims. Interval membership is O(1); no throughput numbers are published.
 - Multi-threaded writers.

@@ -17,9 +17,10 @@ Agents store memories in a hierarchy — for example `root → project → sessi
 | You have | GraniteDB gives you |
 |---|---|
 | Agent / project / session / episode memories | Nodes with stable ids and canonical paths (`/agent/session-12/fact-3`) |
-| “Everything under this session” | `children`, `ancestors`, and preorder `subtree` walks |
+| “Everything under this session” | `children`, `ancestors`, preorder `subtree`, and a filtered `query` |
+| Path patterns | `glob("/proj/*/memory")` and `glob("/proj/**/memory")` |
 | Process crash | WAL (`tree.wal`) plus atomic `snapshot.bin` |
-| Embeddings (later) | Optional `Vec<f32>` on each payload; subtree vector search is on the roadmap |
+| Embeddings | Optional `Vec<f32>` on each payload; `search_subtree` / `search_subtree_ann` scoped by Euler interval |
 | Parent summaries (later) | `summary` field on every node; roll-up jobs are on the roadmap |
 
 This crate used to be described as a document NoSQL database. That sketch is still in the repository; **the product is the memory tree.** See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and the 15-day plan.
@@ -28,19 +29,23 @@ No latency or throughput numbers are published here. Benches land later; claims 
 
 ---
 
-## Status (0.1.0-beta.1)
+## Status (0.2.0-beta.1)
 
 **In this release**
 
 - `MemoryTree`: insert, get (id and path), move, rename, delete-subtree, children, ancestors, subtree iteration
+- DFS Euler-tour intervals: `in_subtree` is an interval test; `validate` checks nesting
+- `query(root)`: filter by `NodeKind`, relative depth, JSON payload predicates, recency, and a limit
+- Path globs: `*` (one segment) and `**` (zero or more), resolved from a literal path-index prefix
 - Node model: `NodeId`, `NodePath`, `NodeKind`, `Payload` (JSON + optional embedding), TTL / decay fields
+- Subtree vector search: exact `search_subtree` and ANN `search_subtree_ann`, both scoped by Euler interval
 - Durable open: crash-safe WAL with CRC32 and `fsync`, atomic snapshots, torn-tail recovery
-- Tests: unit tests, durability tests, a proptest over random insert/move/rename/delete
+- Tests: unit tests (including each filter and glob form), durability reopen of intervals and queries, a proptest that interval membership matches ancestor walking
 - CI on `stable` for Ubuntu and macOS (`fmt`, `clippy -D warnings`, `test`)
 
 **Not in this release** (roadmap)
 
-- Vector similarity search inside a subtree (brute-force SIMD, then HNSW)
+- SIMD inner-loop vector kernels and published recall numbers
 - Automatic summary roll-ups
 - TTL eviction / decay sweeper
 - Criterion benches and a kill-9 crash suite
@@ -86,6 +91,15 @@ fn main() -> granitedb::GraniteResult<()> {
         println!("{} {}", node.id, node.path);
     }
 
+    let recent = tree
+        .query(project)?
+        .kind(NodeKind::Memory)
+        .payload_contains("text", "Rust")
+        .most_recent(8)
+        .collect()?;
+    let globbed = tree.glob("/research-bot/**/prefers-rust")?;
+    let _ = (recent, globbed);
+
     tree.checkpoint()?;
     Ok(())
 }
@@ -114,8 +128,8 @@ let hits = tree.search_subtree(project, &query, 8, DistanceMetric::Cosine)?;
 
 Full write-up: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-1. **Day 1 (this tag)** — node model, tree ops, WAL + snapshot, tests, CI, beta release
-2. Subtree query API (kind / depth / path glob)
+1. Day 1 — node model, tree ops, WAL + snapshot, tests, CI, beta release
+2. **Day 2 (this tag)** — subtree query API, path globs, DFS interval numbers
 3. Brute-force SIMD vector search inside a subtree
 4. HNSW, still subtree-scoped
 5. Summary roll-ups
