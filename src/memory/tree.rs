@@ -491,6 +491,15 @@ impl MemoryTree {
         self.rollup.summarize(&view)
     }
 
+    /// Drop the cached summary of `id` (the parent of a write). Does not
+    /// walk ancestors; that is a later step.
+    fn invalidate_summary(&mut self, id: NodeId) {
+        self.summary_fresh.remove(&id);
+        if let Some(node) = self.nodes.get_mut(&id) {
+            node.summary = None;
+        }
+    }
+
     /// Move `id` under `new_parent`. Paths of the whole subtree are rewritten.
     pub fn move_node(&mut self, id: NodeId, new_parent: NodeId) -> GraniteResult<()> {
         self.validate_move(id, new_parent)?;
@@ -1130,6 +1139,9 @@ impl MemoryTree {
                 }
                 let embedding = self.nodes.get(id).and_then(|n| n.payload.embedding.clone());
                 self.hnsw_upsert(*id, embedding.as_deref());
+                if let Some(parent_id) = self.nodes.get(id).and_then(|n| n.parent_id) {
+                    self.invalidate_summary(parent_id);
+                }
                 Ok(())
             }
             TreeOp::Move {
@@ -1170,6 +1182,7 @@ impl MemoryTree {
         }
         self.hnsw_upsert(id, embedding.as_deref());
         self.rebuild_intervals();
+        self.invalidate_summary(parent_id);
         Ok(())
     }
 
@@ -1201,6 +1214,8 @@ impl MemoryTree {
         }
         self.repath_subtree(id)?;
         self.rebuild_intervals();
+        self.invalidate_summary(old_parent);
+        self.invalidate_summary(new_parent);
         Ok(())
     }
 
@@ -1210,11 +1225,15 @@ impl MemoryTree {
         new_name: &str,
         updated_at: chrono::DateTime<Utc>,
     ) -> GraniteResult<()> {
+        let parent_id = self.nodes.get(&id).and_then(|n| n.parent_id);
         if let Some(node) = self.nodes.get_mut(&id) {
             node.name = new_name.to_string();
             node.updated_at = updated_at;
         }
         self.repath_subtree(id)?;
+        if let Some(parent_id) = parent_id {
+            self.invalidate_summary(parent_id);
+        }
         Ok(())
     }
 
@@ -1229,6 +1248,7 @@ impl MemoryTree {
             parent.children.retain(|c| *c != id);
         }
         for rid in ids {
+            self.summary_fresh.remove(&rid);
             if let Some(node) = self.nodes.remove(&rid) {
                 self.path_index.remove(&node.path);
                 if self.maintain_hnsw {
@@ -1240,6 +1260,7 @@ impl MemoryTree {
             self.hnsw.compact_if_needed();
         }
         self.rebuild_intervals();
+        self.invalidate_summary(parent_id);
         Ok(())
     }
 
