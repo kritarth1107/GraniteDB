@@ -128,13 +128,13 @@ impl SemanticSearchEngine {
             .into_iter()
             .map(|vr| {
                 let vs = vr.score as f64;
-                let ks = keyword_scores.get(&vr.doc_id).copied().unwrap_or(0.0);
+                let ks = keyword_scores.get(&vr.id).copied().unwrap_or(0.0);
 
                 // Reciprocal Rank Fusion (RRF) inspired combination
                 let hybrid = self.config.vector_weight * vs + self.config.keyword_weight * ks;
 
                 HybridSearchResult {
-                    doc_id: vr.doc_id,
+                    doc_id: vr.id,
                     vector_score: vs,
                     keyword_score: ks,
                     hybrid_score: hybrid,

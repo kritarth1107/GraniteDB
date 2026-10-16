@@ -548,7 +548,7 @@ impl MemoryTree {
             .search(query, fetch)
             .into_iter()
             .filter_map(|hit| {
-                let id = NodeId::from_raw(hit.doc_id.parse::<u64>().ok()?);
+                let id = NodeId::from_raw(hit.id.parse::<u64>().ok()?);
                 let node_iv = self.intervals.get(&id)?;
                 if iv.contains(*node_iv) {
                     Some(SearchHit {
@@ -1090,7 +1090,7 @@ impl MemoryTree {
             })
             .collect();
         for (id, emb) in pairs {
-            self.hnsw.insert(&id.to_string(), emb);
+            self.hnsw.insert(id.to_string(), emb);
         }
     }
 
@@ -1099,7 +1099,7 @@ impl MemoryTree {
         self.hnsw.remove(&key);
         if let Some(emb) = embedding {
             if !emb.is_empty() {
-                self.hnsw.insert(&key, emb.to_vec());
+                self.hnsw.insert(key, emb.to_vec());
             }
         }
     }
