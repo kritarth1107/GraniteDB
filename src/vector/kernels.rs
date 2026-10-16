@@ -25,7 +25,7 @@ pub fn distance(metric: DistanceMetric, a: &[f32], b: &[f32]) -> f32 {
         DistanceMetric::Cosine => cosine_distance(a, b),
         DistanceMetric::Euclidean => euclidean_distance(a, b),
         DistanceMetric::DotProduct => dot_product_distance(a, b),
-        DistanceMetric::Manhattan => super::scalar::manhattan_distance(a, b),
+        DistanceMetric::Manhattan => manhattan_distance(a, b),
     }
 }
 
@@ -47,6 +47,12 @@ pub fn euclidean_distance(a: &[f32], b: &[f32]) -> f32 {
 #[inline]
 pub fn dot_product_distance(a: &[f32], b: &[f32]) -> f32 {
     -dot_sum(a, b)
+}
+
+/// Manhattan (L1) distance: `sum(|a_i - b_i|)`.
+#[inline]
+pub fn manhattan_distance(a: &[f32], b: &[f32]) -> f32 {
+    l1_sum(a, b)
 }
 
 /// L2 norm of one vector.
@@ -172,6 +178,31 @@ fn l2_squared(a: &[f32], b: &[f32]) -> f32 {
     while i < n {
         let d = a[i] - b[i];
         sum += d * d;
+        i += 1;
+    }
+    sum
+}
+
+/// 8-wide auto-vectorized L1.
+#[inline(always)]
+fn l1_sum(a: &[f32], b: &[f32]) -> f32 {
+    debug_assert_eq!(a.len(), b.len(), "Vector dimensions must match");
+    let n = a.len();
+    let mut s0 = 0.0f32;
+    let mut s1 = 0.0f32;
+    let mut s2 = 0.0f32;
+    let mut s3 = 0.0f32;
+    let mut i = 0;
+    while i + LANES <= n {
+        s0 += (a[i] - b[i]).abs() + (a[i + 1] - b[i + 1]).abs();
+        s1 += (a[i + 2] - b[i + 2]).abs() + (a[i + 3] - b[i + 3]).abs();
+        s2 += (a[i + 4] - b[i + 4]).abs() + (a[i + 5] - b[i + 5]).abs();
+        s3 += (a[i + 6] - b[i + 6]).abs() + (a[i + 7] - b[i + 7]).abs();
+        i += LANES;
+    }
+    let mut sum = s0 + s1 + s2 + s3;
+    while i < n {
+        sum += (a[i] - b[i]).abs();
         i += 1;
     }
     sum
