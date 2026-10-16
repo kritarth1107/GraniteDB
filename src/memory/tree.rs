@@ -8,6 +8,7 @@ use super::wal::{TreeOp, TreeWal};
 use crate::error::{GraniteError, GraniteResult};
 use crate::vector::distance::DistanceMetric;
 use crate::vector::hnsw::{HnswConfig, HnswIndex};
+use crate::vector::kernels::QueryKernel;
 use chrono::Utc;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -436,6 +437,12 @@ impl MemoryTree {
     }
 
     /// Exact k-NN over embeddings in `root`'s subtree, using [`DistanceMetric`].
+    ///
+    /// Membership is the Euler interval of `root` (`nodes_in_interval`). The
+    /// walk does not follow child lists. Distances use the SIMD-friendly
+    /// [`QueryKernel`] (cosine reuses `||q||`). Embeddings that are missing,
+    /// empty of finite values, or produce a non-finite distance are skipped.
+    /// A dimension mismatch is still an error.
     pub fn search_subtree(
         &self,
         root: NodeId,
@@ -447,6 +454,7 @@ impl MemoryTree {
             return Ok(Vec::new());
         }
         let iv = self.interval(root)?;
+        let kernel = QueryKernel::new(metric, query);
         let mut hits = Vec::new();
         for node in self.nodes_in_interval(iv.dfs_in, iv.dfs_out) {
             let Some(emb) = node.payload.embedding.as_deref() else {
@@ -458,15 +466,23 @@ impl MemoryTree {
                     actual: emb.len(),
                 });
             }
+            if !emb.iter().copied().all(f32::is_finite) {
+                continue;
+            }
+            let distance = kernel.distance(emb);
+            if !distance.is_finite() {
+                continue;
+            }
             hits.push(SearchHit {
                 id: node.id,
-                distance: metric.compute(query, emb),
+                distance,
             });
         }
         hits.sort_by(|a, b| {
             a.distance
                 .partial_cmp(&b.distance)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.id.cmp(&b.id))
         });
         hits.truncate(k);
         Ok(hits)
