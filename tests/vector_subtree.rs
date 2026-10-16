@@ -391,3 +391,123 @@ fn ann_recall_at_k_against_brute_force() {
         "mean recall@{K} {mean} < {MIN_MEAN_RECALL}"
     );
 }
+
+fn ids_of(hits: &[SearchHit]) -> Vec<NodeId> {
+    hits.iter().map(|h| h.id).collect()
+}
+
+#[test]
+fn delete_subtree_drops_embeddings_from_ann() {
+    let mut tree = MemoryTree::ephemeral();
+    let root = tree.root_id();
+    let left = tree
+        .insert_with(root, NodeSpec::new("left").kind(NodeKind::Project))
+        .unwrap();
+    let right = tree
+        .insert_with(root, NodeSpec::new("right").kind(NodeKind::Project))
+        .unwrap();
+    let l1 = tree.insert_with(left, embed("l1", vec![1.0, 0.0])).unwrap();
+    let r1 = tree
+        .insert_with(right, embed("r1", vec![0.0, 1.0]))
+        .unwrap();
+    assert_eq!(tree.vector_index_len(), 2);
+    tree.validate().unwrap();
+
+    tree.delete_subtree(left).unwrap();
+    tree.validate().unwrap();
+    assert_eq!(tree.vector_index_len(), 1);
+    let hits = tree.search_subtree_ann(root, &[1.0, 0.0], 4).unwrap();
+    assert!(hits.iter().all(|h| h.id != l1));
+    assert_eq!(hits[0].id, r1);
+}
+
+#[test]
+fn clearing_an_embedding_removes_it_from_hnsw() {
+    let mut tree = MemoryTree::ephemeral();
+    let root = tree.root_id();
+    let a = tree.insert_with(root, embed("a", vec![1.0, 0.0])).unwrap();
+    tree.insert_with(root, embed("b", vec![0.0, 1.0])).unwrap();
+    assert_eq!(tree.vector_index_len(), 2);
+    tree.set_payload(a, Payload::text("no vec")).unwrap();
+    tree.validate().unwrap();
+    assert_eq!(tree.vector_index_len(), 1);
+    let hits = tree.search_subtree_ann(root, &[1.0, 0.0], 4).unwrap();
+    assert!(hits.iter().all(|h| h.id != a));
+}
+
+#[test]
+fn updating_an_embedding_replaces_the_hnsw_vector() {
+    let mut tree = MemoryTree::ephemeral();
+    let root = tree.root_id();
+    let a = tree.insert_with(root, embed("a", vec![1.0, 0.0])).unwrap();
+    let b = tree.insert_with(root, embed("b", vec![0.9, 0.1])).unwrap();
+    let before = tree.search_subtree_ann(root, &[1.0, 0.0], 1).unwrap();
+    assert_eq!(before[0].id, a);
+    tree.set_payload(a, Payload::text("moved").with_embedding(vec![0.0, 1.0]))
+        .unwrap();
+    tree.validate().unwrap();
+    let after = tree.search_subtree_ann(root, &[1.0, 0.0], 1).unwrap();
+    assert_eq!(
+        after[0].id, b,
+        "updated embedding must leave the old neighborhood"
+    );
+}
+
+#[test]
+fn move_updates_euler_scope_for_ann() {
+    let mut tree = MemoryTree::ephemeral();
+    let root = tree.root_id();
+    let left = tree
+        .insert_with(root, NodeSpec::new("left").kind(NodeKind::Project))
+        .unwrap();
+    let right = tree
+        .insert_with(root, NodeSpec::new("right").kind(NodeKind::Project))
+        .unwrap();
+    let moving = tree.insert_with(left, embed("m", vec![1.0, 0.0])).unwrap();
+    tree.insert_with(right, embed("stay", vec![0.0, 1.0]))
+        .unwrap();
+
+    let before = tree.search_subtree_ann(right, &[1.0, 0.0], 4).unwrap();
+    assert!(before.iter().all(|h| h.id != moving));
+
+    tree.move_node(moving, right).unwrap();
+    tree.validate().unwrap();
+    let after = tree.search_subtree_ann(right, &[1.0, 0.0], 4).unwrap();
+    assert_eq!(after[0].id, moving);
+    let left_hits = tree.search_subtree_ann(left, &[1.0, 0.0], 4).unwrap();
+    assert!(left_hits.iter().all(|h| h.id != moving));
+}
+
+#[test]
+fn reopen_rebuilds_a_consistent_hnsw_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut tree = MemoryTree::open(dir.path()).unwrap();
+    let root = tree.root_id();
+    let keep = tree
+        .insert_with(root, embed("keep", vec![1.0, 0.0, 0.0]))
+        .unwrap();
+    let gone = tree
+        .insert_with(root, embed("gone", vec![0.0, 1.0, 0.0]))
+        .unwrap();
+    tree.insert_with(root, embed("side", vec![0.0, 0.0, 1.0]))
+        .unwrap();
+    tree.delete_subtree(gone).unwrap();
+    tree.checkpoint().unwrap();
+    let extra = tree
+        .insert_with(root, embed("wal", vec![0.5, 0.5, 0.0]))
+        .unwrap();
+    drop(tree);
+
+    let tree = MemoryTree::open(dir.path()).unwrap();
+    tree.validate().unwrap();
+    assert_eq!(tree.vector_index_len(), 3);
+    let query = [1.0f32, 0.0, 0.0];
+    let exact = tree
+        .search_subtree(root, &query, 8, DistanceMetric::Cosine)
+        .unwrap();
+    let ann = tree.search_subtree_ann(root, &query, 8).unwrap();
+    assert_eq!(ids_of(&ann), ids_of(&exact));
+    assert!(ann.iter().any(|h| h.id == keep));
+    assert!(ann.iter().any(|h| h.id == extra));
+    assert!(ann.iter().all(|h| h.id != gone));
+}
