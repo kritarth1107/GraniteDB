@@ -2,6 +2,7 @@ use super::glob::PathGlob;
 use super::id::NodeId;
 use super::node::{Node, NodeKind, NodeSpec, Payload};
 use super::path::NodePath;
+use super::query::SubtreeQuery;
 use super::snapshot::{self, TreeSnapshot};
 use super::wal::{TreeOp, TreeWal};
 use crate::error::{GraniteError, GraniteResult};
@@ -283,6 +284,12 @@ impl MemoryTree {
             .subtree(start)?
             .filter(|node| glob.matches(&node.path))
             .collect())
+    }
+
+    /// Start a query over `root` and its descendants.
+    pub fn query(&self, root: NodeId) -> GraniteResult<SubtreeQuery<'_>> {
+        let _ = self.get(root)?;
+        Ok(SubtreeQuery::new(self, root))
     }
 
     /// Insert `name` under `parent` with the given payload (kind = Memory).
