@@ -14,4 +14,4 @@ mod wal;
 pub use id::NodeId;
 pub use node::{Node, NodeKind, NodeSpec, Payload};
 pub use path::NodePath;
-pub use tree::{MemoryTree, SearchHit, SubtreeIter, TreeOpenOptions};
+pub use tree::{DfsInterval, MemoryTree, SearchHit, SubtreeIter, TreeOpenOptions};

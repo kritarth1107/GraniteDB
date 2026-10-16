@@ -7,8 +7,29 @@ use crate::error::{GraniteError, GraniteResult};
 use crate::vector::distance::DistanceMetric;
 use crate::vector::hnsw::{HnswConfig, HnswIndex};
 use chrono::Utc;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+
+/// Euler-tour enter/leave times for one node.
+///
+/// Assigned by a DFS walk that writes `dfs_in` on enter and `dfs_out` on
+/// leave. `X` is in the subtree of `Y` when
+/// `Y.dfs_in <= X.dfs_in && X.dfs_out <= Y.dfs_out`. The numbers are derived
+/// from child order and are rebuilt after insert, move, and delete_subtree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DfsInterval {
+    /// Tick when the walk entered this node.
+    pub dfs_in: u32,
+    /// Tick when the walk left this node.
+    pub dfs_out: u32,
+}
+
+impl DfsInterval {
+    /// True when `other` is this interval or a nested descendant interval.
+    pub fn contains(self, other: Self) -> bool {
+        self.dfs_in <= other.dfs_in && other.dfs_out <= self.dfs_out
+    }
+}
 
 /// One neighbor from [`MemoryTree::search_subtree`] / [`MemoryTree::search_subtree_ann`].
 #[derive(Clone, Debug, PartialEq)]
@@ -61,6 +82,10 @@ impl TreeOpenOptions {
 pub struct MemoryTree {
     nodes: HashMap<NodeId, Node>,
     path_index: HashMap<NodePath, NodeId>,
+    /// Euler-tour intervals, keyed by node id. Rebuilt after structural ops.
+    intervals: HashMap<NodeId, DfsInterval>,
+    /// `dfs_in → NodeId` so a subtree is the range `[root.dfs_in, root.dfs_out]`.
+    interval_index: BTreeMap<u32, NodeId>,
     root_id: NodeId,
     next_id: u64,
     wal: Option<TreeWal>,
@@ -85,6 +110,8 @@ impl MemoryTree {
         let mut tree = Self {
             nodes: HashMap::new(),
             path_index: HashMap::new(),
+            intervals: HashMap::new(),
+            interval_index: BTreeMap::new(),
             root_id: NodeId::ROOT,
             next_id: 1,
             wal: None,
@@ -117,6 +144,7 @@ impl MemoryTree {
         self.nodes.insert(root.id, root);
         self.root_id = NodeId::ROOT;
         self.next_id = self.next_id.max(1);
+        self.rebuild_intervals();
     }
 
     fn open_with(dir: &Path, opts: TreeOpenOptions) -> GraniteResult<Self> {
@@ -159,6 +187,7 @@ impl MemoryTree {
                 "snapshot is missing the root node".to_string(),
             ));
         }
+        self.rebuild_intervals();
         Ok(())
     }
 
@@ -205,6 +234,15 @@ impl MemoryTree {
     /// Fetch a node by a path string (`/a/b`).
     pub fn get_by_path_str(&self, path: &str) -> GraniteResult<&Node> {
         self.get_by_path(&NodePath::parse(path)?)
+    }
+
+    /// Euler-tour interval for `id`.
+    pub fn interval(&self, id: NodeId) -> GraniteResult<DfsInterval> {
+        let _ = self.get(id)?;
+        self.intervals
+            .get(&id)
+            .copied()
+            .ok_or_else(|| GraniteError::Internal(format!("missing DFS interval for {id}")))
     }
 
     /// Insert `name` under `parent` with the given payload (kind = Memory).
@@ -537,6 +575,14 @@ impl MemoryTree {
     }
 
     fn subtree_ids(&self, id: NodeId) -> Vec<NodeId> {
+        if let Some(iv) = self.intervals.get(&id) {
+            return self
+                .interval_index
+                .range(iv.dfs_in..=iv.dfs_out)
+                .map(|(_, nid)| *nid)
+                .collect();
+        }
+        // Fallback walk if intervals have not been assigned yet.
         let mut ids = vec![id];
         let mut i = 0;
         while i < ids.len() {
@@ -549,7 +595,45 @@ impl MemoryTree {
     }
 
     fn is_in_subtree(&self, root: NodeId, candidate: NodeId) -> bool {
-        self.subtree_ids(root).contains(&candidate)
+        match (self.intervals.get(&root), self.intervals.get(&candidate)) {
+            (Some(r), Some(c)) => r.contains(*c),
+            _ => self.subtree_ids(root).contains(&candidate),
+        }
+    }
+
+    fn rebuild_intervals(&mut self) {
+        let mut tick = 0u32;
+        let mut assigned = HashMap::with_capacity(self.nodes.len());
+        if self.nodes.contains_key(&self.root_id) {
+            self.assign_intervals(self.root_id, &mut tick, &mut assigned);
+        }
+        self.intervals.clear();
+        self.interval_index.clear();
+        for (id, iv) in assigned {
+            self.interval_index.insert(iv.dfs_in, id);
+            self.intervals.insert(id, iv);
+        }
+    }
+
+    fn assign_intervals(
+        &self,
+        id: NodeId,
+        tick: &mut u32,
+        assigned: &mut HashMap<NodeId, DfsInterval>,
+    ) {
+        let dfs_in = *tick;
+        *tick = tick.saturating_add(1);
+        if let Some(node) = self.nodes.get(&id) {
+            let children = node.children.clone();
+            for child in children {
+                if self.nodes.contains_key(&child) {
+                    self.assign_intervals(child, tick, assigned);
+                }
+            }
+        }
+        let dfs_out = *tick;
+        *tick = tick.saturating_add(1);
+        assigned.insert(id, DfsInterval { dfs_in, dfs_out });
     }
 
     fn validate_insert(&self, parent: NodeId, spec: &NodeSpec) -> GraniteResult<()> {
@@ -707,6 +791,7 @@ impl MemoryTree {
         let embedding = node.payload.embedding.clone();
         self.nodes.insert(id, node);
         self.hnsw_upsert(id, embedding.as_deref());
+        self.rebuild_intervals();
         Ok(())
     }
 
@@ -737,6 +822,7 @@ impl MemoryTree {
             node.updated_at = updated_at;
         }
         self.repath_subtree(id)?;
+        self.rebuild_intervals();
         Ok(())
     }
 
@@ -770,6 +856,7 @@ impl MemoryTree {
                 self.hnsw.remove(&rid.to_string());
             }
         }
+        self.rebuild_intervals();
         Ok(())
     }
 

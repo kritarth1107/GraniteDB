@@ -56,7 +56,8 @@ pub use database::Database;
 pub use document::{BsonValue, Document};
 pub use error::{GraniteError, GraniteResult};
 pub use memory::{
-    MemoryTree, Node, NodeId, NodeKind, NodePath, NodeSpec, Payload, SearchHit, TreeOpenOptions,
+    DfsInterval, MemoryTree, Node, NodeId, NodeKind, NodePath, NodeSpec, Payload, SearchHit,
+    TreeOpenOptions,
 };
 pub use network::GraniteServer;
 pub use search::FullTextSearchEngine;
