@@ -4,6 +4,7 @@
 //! [`NodeId`], a canonical [`NodePath`], typed [`NodeKind`], and a [`Payload`]
 //! that may include an embedding for later subtree vector search.
 
+mod glob;
 mod id;
 mod node;
 mod path;
@@ -11,6 +12,7 @@ mod snapshot;
 mod tree;
 mod wal;
 
+pub use glob::{GlobSeg, PathGlob};
 pub use id::NodeId;
 pub use node::{Node, NodeKind, NodeSpec, Payload};
 pub use path::NodePath;

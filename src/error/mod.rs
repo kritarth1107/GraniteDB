@@ -157,6 +157,9 @@ pub enum GraniteError {
     #[error("invalid node path: {0}")]
     InvalidNodePath(String),
 
+    #[error("invalid path glob: {0}")]
+    InvalidPathGlob(String),
+
     // ── Vector / AI Errors ───────────────────────────────────────────
     #[error("Invalid vector: {0}")]
     InvalidVector(String),
