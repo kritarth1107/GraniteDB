@@ -3,7 +3,7 @@ use super::id::NodeId;
 use super::node::{Node, NodeKind, NodeSpec, Payload};
 use super::path::NodePath;
 use super::query::SubtreeQuery;
-use super::rollup::RollupView;
+use super::rollup::{ExtractiveRollup, Rollup, RollupView};
 use super::snapshot::{self, TreeSnapshot};
 use super::wal::{TreeOp, TreeWal};
 use crate::error::{GraniteError, GraniteResult};
@@ -12,7 +12,7 @@ use crate::vector::hnsw::{HnswConfig, HnswIndex};
 use crate::vector::kernels::QueryKernel;
 use chrono::Utc;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BinaryHeap, HashMap};
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Euler-tour enter/leave times for one node.
@@ -127,6 +127,11 @@ pub struct MemoryTree {
     hnsw: HnswIndex<NodeId>,
     /// When false, mutations skip the live HNSW and a rebuild follows (open/replay).
     maintain_hnsw: bool,
+    /// Pluggable parent summarizer. Not persisted; reopen installs extractive.
+    rollup: Box<dyn Rollup>,
+    /// Node ids whose `Node.summary` matches the current [`Rollup`] and has
+    /// not been invalidated. Derived; not written to the WAL.
+    summary_fresh: HashSet<NodeId>,
     data_dir: Option<PathBuf>,
     ops_since_checkpoint: u64,
     auto_checkpoint_every: Option<u64>,
@@ -154,6 +159,8 @@ impl MemoryTree {
             wal: None,
             hnsw: HnswIndex::new(HnswConfig::default()),
             maintain_hnsw: true,
+            rollup: Box::new(ExtractiveRollup::default()),
+            summary_fresh: HashSet::new(),
             data_dir: None,
             ops_since_checkpoint: 0,
             auto_checkpoint_every: None,
@@ -423,6 +430,65 @@ impl MemoryTree {
             node.expires_at,
             node.decay,
         )
+    }
+
+    /// Replace the roll-up strategy. Cached summaries are dropped because
+    /// they were produced by the previous implementation.
+    pub fn set_rollup(&mut self, rollup: impl Rollup + 'static) {
+        self.rollup = Box::new(rollup);
+        self.summary_fresh.clear();
+        for node in self.nodes.values_mut() {
+            node.summary = None;
+        }
+    }
+
+    /// True when `id` has a cached roll-up that has not been invalidated.
+    pub fn has_fresh_summary(&self, id: NodeId) -> GraniteResult<bool> {
+        let _ = self.get(id)?;
+        Ok(self.summary_fresh.contains(&id))
+    }
+
+    /// Return the cached summary for `id`, computing it with the current
+    /// [`Rollup`] if the cache is empty or stale.
+    ///
+    /// The result is stored on [`Node::summary`] in memory only; lazy
+    /// computes are not WAL records. Call [`MemoryTree::checkpoint`] to
+    /// persist whatever is currently cached.
+    pub fn summary(&mut self, id: NodeId) -> GraniteResult<Option<&str>> {
+        self.refresh_summary(id)?;
+        Ok(self.nodes.get(&id).and_then(|n| n.summary.as_deref()))
+    }
+
+    /// Force a recompute of `id`'s summary even if a cache entry exists.
+    pub fn rollup(&mut self, id: NodeId) -> GraniteResult<Option<String>> {
+        let _ = self.get(id)?;
+        self.summary_fresh.remove(&id);
+        self.refresh_summary(id)?;
+        Ok(self.nodes.get(&id).and_then(|n| n.summary.clone()))
+    }
+
+    fn refresh_summary(&mut self, id: NodeId) -> GraniteResult<()> {
+        let _ = self.get(id)?;
+        if self.summary_fresh.contains(&id) {
+            return Ok(());
+        }
+        let text = self.compute_summary(id)?;
+        if let Some(node) = self.nodes.get_mut(&id) {
+            node.summary = text;
+        }
+        self.summary_fresh.insert(id);
+        Ok(())
+    }
+
+    fn compute_summary(&self, id: NodeId) -> GraniteResult<Option<String>> {
+        let ids = self.subtree_ids(id);
+        let parent = self.nodes.get(&id).ok_or(GraniteError::NodeNotFound(id))?;
+        let subtree: Vec<&Node> = ids
+            .into_iter()
+            .filter_map(|nid| self.nodes.get(&nid))
+            .collect();
+        let view = RollupView::from_parts(parent, subtree);
+        self.rollup.summarize(&view)
     }
 
     /// Move `id` under `new_parent`. Paths of the whole subtree are rewritten.
@@ -1057,6 +1123,11 @@ impl MemoryTree {
                     node.decay = *decay;
                     node.updated_at = *updated_at;
                 }
+                if summary.is_some() {
+                    self.summary_fresh.insert(*id);
+                } else {
+                    self.summary_fresh.remove(id);
+                }
                 let embedding = self.nodes.get(id).and_then(|n| n.payload.embedding.clone());
                 self.hnsw_upsert(*id, embedding.as_deref());
                 Ok(())
@@ -1092,7 +1163,11 @@ impl MemoryTree {
         self.path_index.insert(node.path.clone(), id);
         self.next_id = self.next_id.max(id.raw().saturating_add(1));
         let embedding = node.payload.embedding.clone();
+        let has_summary = node.summary.is_some();
         self.nodes.insert(id, node);
+        if has_summary {
+            self.summary_fresh.insert(id);
+        }
         self.hnsw_upsert(id, embedding.as_deref());
         self.rebuild_intervals();
         Ok(())

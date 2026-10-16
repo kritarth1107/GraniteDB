@@ -99,7 +99,8 @@ pub struct Node {
     pub kind: NodeKind,
     /// User payload.
     pub payload: Payload,
-    /// Optional roll-up summary (populated by later roll-up jobs).
+    /// Cached roll-up of the subtree, filled by [`super::MemoryTree::summary`]
+    /// / [`super::MemoryTree::rollup`] and cleared when a descendant is written.
     pub summary: Option<String>,
     /// Creation time (UTC).
     pub created_at: DateTime<Utc>,
