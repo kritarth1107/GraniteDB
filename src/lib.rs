@@ -57,7 +57,7 @@ pub use document::{BsonValue, Document};
 pub use error::{GraniteError, GraniteResult};
 pub use memory::{
     DfsInterval, GlobSeg, MemoryTree, Node, NodeId, NodeKind, NodePath, NodeSpec, PathGlob,
-    Payload, SearchHit, SubtreeQuery, TreeOpenOptions,
+    Payload, Rollup, RollupView, SearchHit, SubtreeQuery, TreeOpenOptions,
 };
 pub use network::GraniteServer;
 pub use search::FullTextSearchEngine;

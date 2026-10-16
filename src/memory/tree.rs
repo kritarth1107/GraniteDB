@@ -3,6 +3,7 @@ use super::id::NodeId;
 use super::node::{Node, NodeKind, NodeSpec, Payload};
 use super::path::NodePath;
 use super::query::SubtreeQuery;
+use super::rollup::RollupView;
 use super::snapshot::{self, TreeSnapshot};
 use super::wal::{TreeOp, TreeWal};
 use crate::error::{GraniteError, GraniteResult};
@@ -329,6 +330,20 @@ impl MemoryTree {
     pub fn query(&self, root: NodeId) -> GraniteResult<SubtreeQuery<'_>> {
         let _ = self.get(root)?;
         Ok(SubtreeQuery::new(self, root))
+    }
+
+    /// Parent plus preorder descendants, for a [`super::Rollup`] implementation.
+    pub fn rollup_view(&self, id: NodeId) -> GraniteResult<RollupView<'_>> {
+        let ids = self.subtree_ids(id);
+        if ids.is_empty() {
+            return Err(GraniteError::NodeNotFound(id));
+        }
+        let parent = self.nodes.get(&id).ok_or(GraniteError::NodeNotFound(id))?;
+        let subtree: Vec<&Node> = ids
+            .into_iter()
+            .filter_map(|nid| self.nodes.get(&nid))
+            .collect();
+        Ok(RollupView::from_parts(parent, subtree))
     }
 
     /// Insert `name` under `parent` with the given payload (kind = Memory).
