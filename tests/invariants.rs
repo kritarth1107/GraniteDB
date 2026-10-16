@@ -32,6 +32,17 @@ fn live_ids(tree: &MemoryTree) -> Vec<NodeId> {
     tree.iter().map(|n| n.id).collect()
 }
 
+/// Ancestor-walk membership: `cand` is `root` or has `root` as an ancestor.
+fn walk_in_subtree(tree: &MemoryTree, root: NodeId, cand: NodeId) -> bool {
+    if root == cand {
+        return true;
+    }
+    tree.ancestors(cand)
+        .unwrap()
+        .iter()
+        .any(|node| node.id == root)
+}
+
 fn apply_raw(tree: &mut MemoryTree, op: &RawOp) {
     let ids = live_ids(tree);
     match op {
@@ -79,6 +90,25 @@ proptest! {
         // Every non-root node is reachable from root.
         let from_root: Vec<_> = tree.subtree(tree.root_id()).unwrap().map(|n| n.id).collect();
         prop_assert_eq!(from_root.len(), tree.len());
+    }
+
+    #[test]
+    fn interval_membership_matches_ancestor_walk(ops in arb_ops(40)) {
+        let tree = apply_all(&ops);
+        let ids = live_ids(&tree);
+        for &root in &ids {
+            for &cand in &ids {
+                let by_interval = tree.in_subtree(root, cand).expect("both ids live");
+                let by_walk = walk_in_subtree(&tree, root, cand);
+                prop_assert_eq!(
+                    by_interval,
+                    by_walk,
+                    "interval vs walk mismatch for root={} cand={}",
+                    root,
+                    cand
+                );
+            }
+        }
     }
 
     #[test]

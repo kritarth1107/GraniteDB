@@ -1,6 +1,6 @@
 //! Crash-safety tests: reopen, snapshot, torn WAL tail.
 
-use granitedb::{MemoryTree, NodeKind, NodeSpec, Payload, TreeOpenOptions};
+use granitedb::{MemoryTree, NodeId, NodeKind, NodeSpec, Payload, TreeOpenOptions};
 use std::fs::OpenOptions;
 use std::io::Write;
 
@@ -131,6 +131,104 @@ fn move_and_delete_survive_reopen() {
     tree.validate().unwrap();
     assert!(tree.get_by_path_str("/p1").is_err());
     assert_eq!(tree.get_by_path_str("/p2/leaf").unwrap().id, leaf);
+}
+
+fn interval_table(tree: &MemoryTree) -> Vec<(u64, u32, u32)> {
+    let mut rows: Vec<_> = tree
+        .iter()
+        .map(|node| {
+            let iv = tree.interval(node.id).unwrap();
+            (node.id.raw(), iv.dfs_in, iv.dfs_out)
+        })
+        .collect();
+    rows.sort_unstable();
+    rows
+}
+
+fn query_memory_ids(tree: &MemoryTree, root: NodeId) -> Vec<u64> {
+    tree.query(root)
+        .unwrap()
+        .kind(NodeKind::Memory)
+        .payload_contains("text", "keep")
+        .collect()
+        .unwrap()
+        .into_iter()
+        .map(|n| n.id.raw())
+        .collect()
+}
+
+fn glob_fact_ids(tree: &MemoryTree) -> Vec<u64> {
+    tree.glob("/beta/**/fact")
+        .unwrap()
+        .into_iter()
+        .map(|n| n.id.raw())
+        .collect()
+}
+
+fn populate_query_tree(tree: &mut MemoryTree) -> NodeId {
+    let root = tree.root_id();
+    let alpha = tree
+        .insert_with(root, NodeSpec::new("alpha").kind(NodeKind::Project))
+        .unwrap();
+    let sess = tree
+        .insert_with(alpha, NodeSpec::new("sess").kind(NodeKind::Session))
+        .unwrap();
+    tree.insert(sess, "fact", Payload::text("keep this rust note"))
+        .unwrap();
+    tree.insert(sess, "noise", Payload::text("ignore me"))
+        .unwrap();
+    let beta = tree
+        .insert_with(root, NodeSpec::new("beta").kind(NodeKind::Project))
+        .unwrap();
+    tree.insert(beta, "fact", Payload::text("keep elsewhere"))
+        .unwrap();
+    tree.move_node(sess, beta).unwrap();
+    tree.rename(alpha, "alpha2").unwrap();
+    alpha
+}
+
+#[test]
+fn intervals_and_queries_survive_wal_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut tree = TreeOpenOptions::new()
+        .fsync(false)
+        .auto_checkpoint_every(None)
+        .open(dir.path())
+        .unwrap();
+    let alpha = populate_query_tree(&mut tree);
+    tree.validate().unwrap();
+    let intervals = interval_table(&tree);
+    let queried = query_memory_ids(&tree, tree.root_id());
+    let globbed = glob_fact_ids(&tree);
+    assert!(!queried.is_empty());
+    assert!(!globbed.is_empty());
+    let alpha_still = tree.get(alpha).unwrap().path.to_string();
+    drop(tree);
+
+    let tree = MemoryTree::open(dir.path()).unwrap();
+    tree.validate().unwrap();
+    assert_eq!(interval_table(&tree), intervals);
+    assert_eq!(query_memory_ids(&tree, tree.root_id()), queried);
+    assert_eq!(glob_fact_ids(&tree), globbed);
+    assert_eq!(tree.get(alpha).unwrap().path.to_string(), alpha_still);
+}
+
+#[test]
+fn intervals_and_queries_survive_snapshot_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut tree = MemoryTree::open(dir.path()).unwrap();
+    populate_query_tree(&mut tree);
+    tree.checkpoint().unwrap();
+    let intervals = interval_table(&tree);
+    let queried = query_memory_ids(&tree, tree.root_id());
+    let globbed = glob_fact_ids(&tree);
+    drop(tree);
+
+    let tree = MemoryTree::open(dir.path()).unwrap();
+    tree.validate().unwrap();
+    assert_eq!(interval_table(&tree), intervals);
+    assert_eq!(query_memory_ids(&tree, tree.root_id()), queried);
+    assert_eq!(glob_fact_ids(&tree), globbed);
 }
 
 #[test]
