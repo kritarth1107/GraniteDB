@@ -34,7 +34,7 @@ The repository on `master` was a document-oriented NoSQL sketch in the MongoDB s
 
 **Replace as the primary API.** Collections-of-documents as the thing users program against. The new primary type is `MemoryTree`.
 
-**Defer.** Network protocol for tree ops, Python bindings, roll-up jobs, TTL eviction, Criterion numbers.
+**Defer.** Network protocol for tree ops, Python bindings, LLM-backed roll-ups, TTL eviction, Criterion numbers.
 
 ---
 
@@ -53,7 +53,7 @@ An AI project should be able to:
 9. **Expire** stale memories with TTL and optional decay scores.
 10. Expose an **excellent Rust API** first; a server and Python bindings after the engine is real.
 
-Day 1 delivers (1)–(5) and (8), plus the data fields needed by (6), (7), and (9). Day 2 delivers subtree filters, path globs, and DFS interval numbers so (6) can scope vector search without walking the child lists. Day 3 delivers the exact, SIMD-friendly half of (6): `search_subtree` for cosine / L2 / dot / L1. Day 4 delivers the approximate half: incremental HNSW keyed by `NodeId`, Euler-scoped `search_subtree_ann`, and recall tests.
+Day 1 delivers (1)–(5) and (8), plus the data fields needed by (6), (7), and (9). Day 2 delivers subtree filters, path globs, and DFS interval numbers so (6) can scope vector search without walking the child lists. Day 3 delivers the exact, SIMD-friendly half of (6): `search_subtree` for cosine / L2 / dot / L1. Day 4 delivers the approximate half: incremental HNSW keyed by `NodeId`, Euler-scoped `search_subtree_ann`, and recall tests. Day 5 delivers (7): a pluggable `Rollup` trait, a deterministic extractive default, and invalidate-on-write parent summaries.
 
 ---
 
@@ -69,7 +69,7 @@ Every node has:
 | `name` | Last path segment; unique among siblings |
 | `kind` | `Root`, `Project`, `Session`, `Episode`, `Memory`, `Summary`, or `Custom(String)` |
 | `payload` | JSON value plus optional embedding (`Vec<f32>`) |
-| `summary` | Optional rolled-up text (written now, computed later) |
+| `summary` | Cached roll-up of the subtree (extractive by default; invalidated on descendant writes) |
 | `created_at` / `updated_at` | UTC timestamps |
 | `expires_at` | Optional TTL instant |
 | `decay` | Optional score in `[0, 1]` for later eviction |
@@ -186,7 +186,9 @@ Auto-checkpoint every 256 mutations by default; callers can also call `checkpoin
 
 No throughput numbers until Criterion (day 8). Recall@10 versus exact `search_subtree` is asserted in tests (mean ≥ 0.90 on a seeded 96-vector layout that measured 1.0).
 
-**Roll-ups (later):** a parent may store a `summary`. A pluggable `Rollup` trait produces text (extractive concat first, optional LLM hook). Invalidated on child mutate; refreshed lazily or on `rollup(id)`.
+**Roll-ups (day 5):** `tree.summary(id)` returns a parent's cached roll-up, computing it with the current `Rollup` if the cache is cold. `tree.rollup(id)` forces a refresh. The default `ExtractiveRollup` concatenates descendant payload text in preorder as `{name}: {text}` lines (no network, no model) and truncates on a Unicode scalar boundary. `set_rollup` installs a custom implementation (LLM-backed later). Insert, update, move, rename, and `delete_subtree` clear the parent and every ancestor so the next `summary()` call sees the new subtree; a sibling branch keeps its cache.
+
+Persistence: lazy computes are **not** WAL records. `Node.summary` is part of the snapshot image, so a checkpointed `Some(summary)` is treated as a warm cache on open. WAL replay of descendant writes still invalidates the ancestor chain. Reopen with the default extractive summarizer therefore matches a live tree. A custom `Rollup` is process-local — callers reinstall it with `set_rollup` after open.
 
 **TTL / decay (later):** `expires_at` and `decay` are stored now. A sweeper will drop expired nodes and optionally decay scores on read. No silent data loss on day 1 — expired nodes remain until eviction is implemented and tested.
 
@@ -213,6 +215,7 @@ let globbed = tree.glob("/agent/**/note")?;
 assert!(tree.in_subtree(project, recent[0].id)?);
 let query = vec![1.0f32, 0.0, 0.0];
 let _hits = tree.search_subtree_ann(project, &query, 8)?;
+let _rolled = tree.summary(project)?;
 
 tree.checkpoint()?;
 ```
@@ -242,7 +245,7 @@ Dates are sequencing, not a calendar promise. Each day should land on `master` w
 | **2** | Subtree query API | Filters by kind/depth/payload, path glob, DFS interval numbers — **done** (`0.2.0-beta.1`) |
 | **3** | Brute-force SIMD vectors | `search_subtree` with cosine / L2 / dot / L1, auto-vectorized inner loop, correctness tests vs scalar — **done** (`0.3.0-beta.1`) |
 | **4** | HNSW in a subtree | Incremental insert/delete, recall tests vs brute-force, scoped to Euler interval — **done** (`0.4.0-beta.1`) |
-| **5** | Roll-ups | `Rollup` trait, extractive default, invalidate-on-write, `summary` on parents |
+| **5** | Roll-ups | `Rollup` trait, extractive default, invalidate-on-write, `summary` on parents — **done** (`0.5.0-beta.1`) |
 | **6** | TTL and decay | Sweeper, lazy expiry on read, decay function, tests that expired nodes vanish only after sweep |
 | **7** | Storage hardening | WAL segment rotation, snapshot catalog, compaction of deleted ids, checksum report |
 | **8** | Criterion | Benches for insert, walk, recovery, vector k-NN; CI job stores artifacts; still no slogan numbers in the README unless measured |
@@ -258,7 +261,7 @@ Out of scope for these 15 days: multi-raft replication, sharding, a Mongo compat
 
 ---
 
-## 9. Day-1 / day-2 / day-3 / day-4 file map
+## 9. Day-1 / day-2 / day-3 / day-4 / day-5 file map
 
 ```
 docs/ARCHITECTURE.md          this file
@@ -268,9 +271,10 @@ src/memory/path.rs            NodePath
 src/memory/glob.rs            PathGlob (`*` / `**`)
 src/memory/node.rs            Node, NodeKind, Payload, NodeSpec
 src/memory/query.rs           SubtreeQuery builder
+src/memory/rollup.rs          Rollup trait, RollupView, ExtractiveRollup
 src/memory/wal.rs             TreeOp + adapter over storage::WriteAheadLog
 src/memory/snapshot.rs        atomic snapshot
-src/memory/tree.rs            MemoryTree (ops, Euler intervals, glob, search)
+src/memory/tree.rs            MemoryTree (ops, Euler intervals, glob, search, roll-ups)
 src/vector/distance.rs        DistanceMetric dispatch
 src/vector/hnsw.rs            generic graph, tombstone delete, compact, filtered search
 src/vector/kernels.rs         auto-vectorized f32 inner loops + QueryKernel
@@ -281,19 +285,21 @@ tests/durability.rs           reopen / torn-tail / query recovery tests
 tests/invariants.rs           proptest (invariants + interval vs walk)
 tests/distance_kernels.rs     SIMD vs scalar kernel agreement
 tests/vector_subtree.rs       subtree-scoped exact + ANN search, recall, delete/move/reopen
+tests/rollup.rs               extractive summarizer, invalidation, custom Rollup, reopen
 .github/workflows/ci.yml
 .github/workflows/release.yml
 ```
 
-Euler intervals are derived state on `MemoryTree` (`DfsInterval` + a `dfs_in` range index). They are not stored on `Node` and are not logged; restore and replay rebuild them from child order. The HNSW graph is also derived: it is not snapshotted. `MemoryTree::validate` checks that stored intervals match a fresh tour, nest in the parent, and do not overlap siblings, and that every indexable embedding is a live HNSW member.
+Euler intervals are derived state on `MemoryTree` (`DfsInterval` + a `dfs_in` range index). They are not stored on `Node` and are not logged; restore and replay rebuild them from child order. The HNSW graph is also derived: it is not snapshotted. Cached roll-ups live on `Node.summary` (so they appear in snapshots) but lazy computes are not WAL records; a `summary_fresh` set is rebuilt from stored `Some(summary)` values on open, then WAL replay of descendant writes invalidates ancestors. `MemoryTree::validate` checks that stored intervals match a fresh tour, nest in the parent, and do not overlap siblings, and that every indexable embedding is a live HNSW member.
 
 ---
 
-## 10. Non-goals for day 4
+## 10. Non-goals for day 5
 
 - Network protocol and CLI against the tree (the old TCP server binary still boots the document sketch).
-- Per-hot-subtree HNSW graphs and product-quantized codes (later).
+- LLM-backed `Rollup` implementations (the trait is the hook; no model is called).
 - Background roll-up / TTL threads.
+- Per-hot-subtree HNSW graphs and product-quantized codes (later).
 - Benchmark claims. No throughput numbers are published until Criterion (day 8). Recall thresholds asserted in tests may be described.
 - Multi-threaded writers.
 - Nightly `std::simd` or architecture-specific intrinsics. The portable 8-lane f32 loops remain the exact-search kernel.

@@ -20,6 +20,10 @@ fn main() -> granitedb::GraniteResult<()> {
         println!("{}  {}", node.id, node.path);
     }
 
+    if let Some(summary) = tree.summary(project)? {
+        println!("project summary: {summary}");
+    }
+
     tree.checkpoint()?;
     Ok(())
 }

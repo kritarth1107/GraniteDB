@@ -21,7 +21,7 @@ Agents store memories in a hierarchy — for example `root → project → sessi
 | Path patterns | `glob("/proj/*/memory")` and `glob("/proj/**/memory")` |
 | Process crash | WAL (`tree.wal`) plus atomic `snapshot.bin` |
 | Embeddings | Optional `Vec<f32>` on each payload; `search_subtree` / `search_subtree_ann` scoped by Euler interval |
-| Parent summaries (later) | `summary` field on every node; roll-up jobs are on the roadmap |
+| Parent summaries | `summary(id)` / `rollup(id)` with a pluggable `Rollup`; extractive default; invalidate-on-write |
 
 This crate used to be described as a document NoSQL database. That sketch is still in the repository; **the product is the memory tree.** See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and the 15-day plan.
 
@@ -29,7 +29,7 @@ No latency or throughput numbers are published here. Benches land later; claims 
 
 ---
 
-## Status (0.4.0-beta.1)
+## Status (0.5.0-beta.1)
 
 **In this release**
 
@@ -41,14 +41,15 @@ No latency or throughput numbers are published here. Benches land later; claims 
 - Exact subtree k-NN: `search_subtree` for cosine / L2 / dot / L1, Euler-range membership, auto-vectorized f32 kernels, bounded k-heap
 - Incremental HNSW keyed by `NodeId`: insert/update upsert, delete_subtree and embedding removal tombstone (then compact), reopen rebuilds from snapshot+WAL
 - `search_subtree_ann` scoped to the Euler interval; tiny or heavily filtered subtrees fall back to exact cosine k-NN so `k` hits still return; ties break by `NodeId`
-- Durable open: crash-safe WAL with CRC32 and `fsync`, atomic snapshots, torn-tail recovery
-- Tests: kernel agreement vs a scalar reference, subtree k-NN for every metric, ANN recall@10 ≥ 0.90 vs exact search (seeded layout measured 1.0), delete/move/reopen, query/glob/interval coverage, durability reopen, interval proptest
+- Parent roll-ups: pluggable `Rollup` trait, deterministic `ExtractiveRollup`, `summary(id)` / `rollup(id)` cache on `Node.summary`, invalidate-on-write up the ancestor chain
+- Durable open: crash-safe WAL with CRC32 and `fsync`, atomic snapshots, torn-tail recovery; snapshotted summaries are a warm cache, lazy computes are not WAL records
+- Tests: kernel agreement vs a scalar reference, subtree k-NN for every metric, ANN recall@10 ≥ 0.90 vs exact search (seeded layout measured 1.0), delete/move/reopen, query/glob/interval coverage, durability reopen, interval proptest, extractive summarizer, invalidation, custom `Rollup`, reopen consistency
 - CI on `stable` for Ubuntu and macOS (`fmt`, `clippy -D warnings`, `test`)
 
 **Not in this release** (roadmap)
 
 - Per-hot-subtree HNSW graphs and product-quantized codes
-- Automatic summary roll-ups
+- LLM-backed `Rollup` implementations
 - TTL eviction / decay sweeper
 - Criterion benches and a kill-9 crash suite
 - Dedicated tree server and Python bindings
@@ -100,7 +101,8 @@ fn main() -> granitedb::GraniteResult<()> {
         .most_recent(8)
         .collect()?;
     let globbed = tree.glob("/research-bot/**/prefers-rust")?;
-    let _ = (recent, globbed);
+    let rolled = tree.summary(project)?;
+    let _ = (recent, globbed, rolled);
 
     tree.checkpoint()?;
     Ok(())
@@ -135,8 +137,8 @@ Full write-up: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 1. Day 1 — node model, tree ops, WAL + snapshot, tests, CI, beta release
 2. Day 2 — subtree query API, path globs, DFS interval numbers
 3. Day 3 — brute-force SIMD vector search inside a subtree
-4. **Day 4 (this tag)** — HNSW, still subtree-scoped
-5. Summary roll-ups
+4. Day 4 — HNSW, still subtree-scoped
+5. **Day 5 (this tag)** — summary roll-ups
 6. TTL and decay eviction
 7. WAL rotation and compaction
 8. Criterion benches
