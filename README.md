@@ -29,7 +29,7 @@ No latency or throughput numbers are published here. Benches land later; claims 
 
 ---
 
-## Status (0.3.0-beta.1)
+## Status (0.4.0-beta.1)
 
 **In this release**
 
@@ -39,14 +39,15 @@ No latency or throughput numbers are published here. Benches land later; claims 
 - Path globs: `*` (one segment) and `**` (zero or more), resolved from a literal path-index prefix
 - Node model: `NodeId`, `NodePath`, `NodeKind`, `Payload` (JSON + optional embedding), TTL / decay fields
 - Exact subtree k-NN: `search_subtree` for cosine / L2 / dot / L1, Euler-range membership, auto-vectorized f32 kernels, bounded k-heap
-- ANN `search_subtree_ann` still filters the shared HNSW index by Euler interval (recall work is next)
+- Incremental HNSW keyed by `NodeId`: insert/update upsert, delete_subtree and embedding removal tombstone (then compact), reopen rebuilds from snapshot+WAL
+- `search_subtree_ann` scoped to the Euler interval; tiny or heavily filtered subtrees fall back to exact cosine k-NN so `k` hits still return; ties break by `NodeId`
 - Durable open: crash-safe WAL with CRC32 and `fsync`, atomic snapshots, torn-tail recovery
-- Tests: kernel agreement vs a scalar reference, subtree k-NN for every metric, query/glob/interval coverage, durability reopen, interval proptest
+- Tests: kernel agreement vs a scalar reference, subtree k-NN for every metric, ANN recall@10 ≥ 0.90 vs exact search (seeded layout measured 1.0), delete/move/reopen, query/glob/interval coverage, durability reopen, interval proptest
 - CI on `stable` for Ubuntu and macOS (`fmt`, `clippy -D warnings`, `test`)
 
 **Not in this release** (roadmap)
 
-- HNSW recall numbers and incremental per-subtree ANN
+- Per-hot-subtree HNSW graphs and product-quantized codes
 - Automatic summary roll-ups
 - TTL eviction / decay sweeper
 - Criterion benches and a kill-9 crash suite
@@ -116,11 +117,13 @@ granite-data/
   wal/segment_00000000.wal     # shared WriteAheadLog (tree ops + document ops)
 ```
 
-Subtree vector search scores the Euler range of a root with `DistanceMetric` (exact, SIMD-friendly kernels) and can also filter the shared `HnswIndex` (ANN):
+Subtree vector search scores the Euler range of a root with `DistanceMetric` (exact, SIMD-friendly kernels) or approximates with the live `HnswIndex` (cosine ANN, same interval scope):
 
 ```rust
 use granitedb::DistanceMetric;
-let hits = tree.search_subtree(project, &query, 8, DistanceMetric::Cosine)?;
+let exact = tree.search_subtree(project, &query, 8, DistanceMetric::Cosine)?;
+let ann = tree.search_subtree_ann(project, &query, 8)?;
+let _ = (exact, ann);
 ```
 
 ---
@@ -131,8 +134,8 @@ Full write-up: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 1. Day 1 — node model, tree ops, WAL + snapshot, tests, CI, beta release
 2. Day 2 — subtree query API, path globs, DFS interval numbers
-3. **Day 3 (this tag)** — brute-force SIMD vector search inside a subtree
-4. HNSW, still subtree-scoped
+3. Day 3 — brute-force SIMD vector search inside a subtree
+4. **Day 4 (this tag)** — HNSW, still subtree-scoped
 5. Summary roll-ups
 6. TTL and decay eviction
 7. WAL rotation and compaction
