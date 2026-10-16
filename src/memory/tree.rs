@@ -245,6 +245,13 @@ impl MemoryTree {
             .ok_or_else(|| GraniteError::Internal(format!("missing DFS interval for {id}")))
     }
 
+    /// True when `id` is `root` or a descendant of `root` (O(1) interval test).
+    pub fn in_subtree(&self, root: NodeId, id: NodeId) -> GraniteResult<bool> {
+        let outer = self.interval(root)?;
+        let inner = self.interval(id)?;
+        Ok(outer.contains(inner))
+    }
+
     /// Insert `name` under `parent` with the given payload (kind = Memory).
     pub fn insert(
         &mut self,
@@ -556,6 +563,77 @@ impl MemoryTree {
         }
         if self.has_cycle() {
             return Err(GraniteError::Internal("cycle detected".into()));
+        }
+        self.validate_intervals()?;
+        Ok(())
+    }
+
+    fn validate_intervals(&self) -> GraniteResult<()> {
+        if self.intervals.len() != self.nodes.len() || self.interval_index.len() != self.nodes.len()
+        {
+            return Err(GraniteError::Internal(
+                "DFS interval index size mismatch".into(),
+            ));
+        }
+        let mut tick = 0u32;
+        let mut expected = HashMap::with_capacity(self.nodes.len());
+        self.assign_intervals(self.root_id, &mut tick, &mut expected);
+        if expected.len() != self.nodes.len() {
+            return Err(GraniteError::Internal(
+                "DFS assignment missed nodes (disconnected from root?)".into(),
+            ));
+        }
+        for (id, node) in &self.nodes {
+            let Some(got) = self.intervals.get(id) else {
+                return Err(GraniteError::Internal(format!(
+                    "{id} has no stored DFS interval"
+                )));
+            };
+            let Some(want) = expected.get(id) else {
+                return Err(GraniteError::Internal(format!(
+                    "{id} was not reached by the Euler tour"
+                )));
+            };
+            if got != want {
+                return Err(GraniteError::Internal(format!(
+                    "{id} interval [{},{}] != expected [{},{}]",
+                    got.dfs_in, got.dfs_out, want.dfs_in, want.dfs_out
+                )));
+            }
+            if got.dfs_in >= got.dfs_out {
+                return Err(GraniteError::Internal(format!(
+                    "{id} has an empty DFS interval"
+                )));
+            }
+            if self.interval_index.get(&got.dfs_in) != Some(id) {
+                return Err(GraniteError::Internal(format!(
+                    "interval index missing dfs_in {}",
+                    got.dfs_in
+                )));
+            }
+            if let Some(pid) = node.parent_id {
+                let parent = self.intervals.get(&pid).ok_or_else(|| {
+                    GraniteError::Internal(format!("parent {pid} of {id} has no interval"))
+                })?;
+                if !(parent.dfs_in < got.dfs_in && got.dfs_out < parent.dfs_out) {
+                    return Err(GraniteError::Internal(format!(
+                        "{id} interval not nested in parent {pid}"
+                    )));
+                }
+            }
+            for pair in node.children.windows(2) {
+                let left = self.intervals.get(&pair[0]).ok_or_else(|| {
+                    GraniteError::Internal(format!("child {} of {id} has no interval", pair[0]))
+                })?;
+                let right = self.intervals.get(&pair[1]).ok_or_else(|| {
+                    GraniteError::Internal(format!("child {} of {id} has no interval", pair[1]))
+                })?;
+                if left.dfs_out >= right.dfs_in {
+                    return Err(GraniteError::Internal(format!(
+                        "sibling intervals overlap under {id}"
+                    )));
+                }
+            }
         }
         Ok(())
     }
