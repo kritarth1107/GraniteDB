@@ -5,8 +5,8 @@
 // (`NodeId` in the memory tree, document id in the legacy sketch).
 //
 // Deleted vectors are tombstoned in place so neighbor indices stay valid.
-// Search, greedy descent, and the entry point skip those slots. A later
-// commit compact-rebuilds the graph when the tombstone ratio grows.
+// Search, greedy descent, and the entry point skip those slots. When the
+// tombstone ratio grows, `compact` rebuilds a dense graph from live vectors.
 //
 // Key parameters:
 //   M           — max connections per node per layer (default 16)
@@ -22,6 +22,12 @@ use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+
+/// Rebuild the graph once this many slots are tombstones *and* they exceed
+/// [`COMPACT_RATIO`] of the live set.
+const COMPACT_MIN_TOMBSTONES: usize = 32;
+/// Tombstones / live vectors that triggers compaction.
+const COMPACT_RATIO: f32 = 0.25;
 
 /// A node in the HNSW graph. `id == None` means the slot is a tombstone.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -210,19 +216,25 @@ where
             .map(|(i, _)| i)
     }
 
+    fn vector_indexable(vector: &[f32], dimensions: usize) -> bool {
+        !vector.is_empty()
+            && vector.iter().copied().all(f32::is_finite)
+            && (dimensions == 0 || vector.len() == dimensions)
+    }
+
     /// Insert a vector into the index. An existing id is replaced.
+    ///
+    /// Empty, non-finite, or dimension-mismatched vectors are skipped (and
+    /// do not panic). Call [`HnswIndex::upsert`] to also drop a previous
+    /// vector when the replacement is not indexable.
     pub fn insert(&mut self, id: impl Into<K>, vector: Vec<f32>) {
         let id = id.into();
+        if !Self::vector_indexable(&vector, self.config.dimensions) {
+            return;
+        }
         if self.config.dimensions == 0 {
             self.config.dimensions = vector.len();
         }
-        assert_eq!(
-            vector.len(),
-            self.config.dimensions,
-            "Vector dimension mismatch: expected {}, got {}",
-            self.config.dimensions,
-            vector.len()
-        );
 
         if self.id_to_node.contains_key(&id) {
             self.remove(&id);
@@ -444,16 +456,23 @@ where
         final_results
     }
 
-    fn hits_from_candidates(
+    fn hits_from_candidates<F>(
         &self,
         candidates: Vec<Candidate>,
         k: usize,
-    ) -> Vec<VectorSearchResult<K>> {
+        keep: F,
+    ) -> Vec<VectorSearchResult<K>>
+    where
+        F: Fn(&K) -> bool,
+    {
         candidates
             .into_iter()
             .filter(|c| c.distance.is_finite() && self.is_live(c.index))
             .filter_map(|c| {
                 let id = self.nodes[c.index].id.clone()?;
+                if !keep(&id) {
+                    return None;
+                }
                 Some(VectorSearchResult {
                     id,
                     distance: c.distance,
@@ -473,6 +492,24 @@ where
 
     /// Search with an explicit beam width (`ef`).
     pub fn search_with_ef(&self, query: &[f32], k: usize, ef: usize) -> Vec<VectorSearchResult<K>> {
+        self.search_filtered(query, k, ef, |_| true)
+    }
+
+    /// Beam-search then keep only ids accepted by `keep`.
+    ///
+    /// Out-of-filter nodes still participate in graph walk so they can bridge
+    /// to in-filter neighbors. Tombstones are never walked. Widen `ef` when
+    /// `keep` is selective so `k` in-filter hits can still surface.
+    pub fn search_filtered<F>(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+        keep: F,
+    ) -> Vec<VectorSearchResult<K>>
+    where
+        F: Fn(&K) -> bool,
+    {
         if k == 0 || self.id_to_node.is_empty() {
             return Vec::new();
         }
@@ -491,7 +528,7 @@ where
 
         let ef = ef.max(k);
         let candidates = self.search_layer(query, current_ep, ef, 0);
-        self.hits_from_candidates(candidates, k)
+        self.hits_from_candidates(candidates, k, keep)
     }
 
     /// Search with a minimum similarity threshold.
@@ -539,6 +576,51 @@ where
         true
     }
 
+    /// Replace the vector for `id`, or drop it when the new vector is not
+    /// indexable. Compacts if tombstones have piled up.
+    pub fn upsert(&mut self, id: K, vector: Vec<f32>) {
+        self.remove(&id);
+        if Self::vector_indexable(&vector, self.config.dimensions) {
+            self.insert(id, vector);
+        }
+        self.compact_if_needed();
+    }
+
+    /// Tombstoned graph slots still occupying the node array.
+    pub fn tombstone_count(&self) -> usize {
+        self.nodes.len().saturating_sub(self.id_to_node.len())
+    }
+
+    /// Rebuild from live vectors in current slot order, dropping tombstones.
+    pub fn compact(&mut self) {
+        if self.tombstone_count() == 0 {
+            return;
+        }
+        let live: Vec<(K, Vec<f32>)> = self
+            .nodes
+            .iter()
+            .filter_map(|n| n.id.clone().map(|id| (id, n.vector.clone())))
+            .collect();
+        let config = self.config.clone();
+        *self = Self::new(config);
+        for (id, vector) in live {
+            self.insert(id, vector);
+        }
+    }
+
+    /// Compact when tombstones exceed [`COMPACT_MIN_TOMBSTONES`] and
+    /// [`COMPACT_RATIO`] of the live set (or the index is all tombstones).
+    pub fn compact_if_needed(&mut self) {
+        let dead = self.tombstone_count();
+        if dead < COMPACT_MIN_TOMBSTONES {
+            return;
+        }
+        let live = self.id_to_node.len();
+        if live == 0 || dead as f32 > live as f32 * COMPACT_RATIO {
+            self.compact();
+        }
+    }
+
     /// Whether `id` is a live (not tombstoned) member of the graph.
     pub fn contains<Q>(&self, id: &Q) -> bool
     where
@@ -568,6 +650,7 @@ where
             "m": self.config.m,
             "ef_construction": self.config.ef_construction,
             "ef_search": self.config.ef_search,
+            "tombstones": self.tombstone_count(),
         })
     }
 
@@ -635,5 +718,59 @@ mod tests {
         let hits = idx.search(&[0.0, 1.0], 1);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, 2);
+    }
+
+    #[test]
+    fn skip_non_finite_and_dimension_mismatch() {
+        let mut idx = HnswIndex::<String>::with_dimensions(2, DistanceMetric::Euclidean);
+        idx.insert("ok", vec![1.0, 0.0]);
+        idx.insert("nan", vec![f32::NAN, 0.0]);
+        idx.insert("inf", vec![f32::INFINITY, 0.0]);
+        idx.insert("empty", vec![]);
+        idx.insert("wide", vec![1.0, 0.0, 0.0]);
+        assert_eq!(idx.len(), 1);
+        assert!(idx.contains("ok"));
+        assert!(!idx.contains("nan"));
+        assert!(!idx.contains("wide"));
+    }
+
+    #[test]
+    fn upsert_replaces_and_invalid_clears() {
+        let mut idx = HnswIndex::<String>::with_dimensions(2, DistanceMetric::Euclidean);
+        idx.upsert("a".into(), vec![0.0, 0.0]);
+        idx.upsert("a".into(), vec![5.0, 0.0]);
+        let hits = idx.search(&[5.0, 0.0], 1);
+        assert_eq!(hits[0].id, "a");
+        assert!(close(hits[0].distance, 0.0));
+        idx.upsert("a".into(), vec![f32::NAN, 0.0]);
+        assert!(idx.is_empty());
+    }
+
+    #[test]
+    fn compact_drops_tombstones_and_keeps_live_hits() {
+        let mut idx = HnswIndex::<String>::with_dimensions(1, DistanceMetric::Euclidean);
+        for i in 0..8 {
+            idx.insert(format!("n{i}"), vec![i as f32]);
+        }
+        idx.remove("n1");
+        idx.remove("n3");
+        assert_eq!(idx.tombstone_count(), 2);
+        idx.compact();
+        assert_eq!(idx.tombstone_count(), 0);
+        assert_eq!(idx.len(), 6);
+        let hits = idx.search(&[3.0], 1);
+        assert_eq!(hits[0].id, "n2");
+    }
+
+    #[test]
+    fn search_filtered_keeps_only_matching_ids() {
+        let mut idx = HnswIndex::<u64>::with_dimensions(1, DistanceMetric::Euclidean);
+        idx.insert(1u64, vec![0.0]);
+        idx.insert(2u64, vec![1.0]);
+        idx.insert(3u64, vec![2.0]);
+        let hits = idx.search_filtered(&[0.0], 8, 16, |id| *id >= 2);
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].id, 2);
+        assert_eq!(hits[1].id, 3);
     }
 }
