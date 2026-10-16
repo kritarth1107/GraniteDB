@@ -511,3 +511,114 @@ fn reopen_rebuilds_a_consistent_hnsw_index() {
     assert!(ann.iter().any(|h| h.id == extra));
     assert!(ann.iter().all(|h| h.id != gone));
 }
+
+#[test]
+fn ann_k_zero_is_empty() {
+    let (tree, _, left, _) = knn_tree();
+    let hits = tree.search_subtree_ann(left, &[1.0, 0.0, 0.0], 0).unwrap();
+    assert!(hits.is_empty());
+}
+
+#[test]
+fn ann_empty_subtree_is_empty() {
+    let mut tree = MemoryTree::ephemeral();
+    let root = tree.root_id();
+    let empty = tree
+        .insert_with(root, NodeSpec::new("empty").kind(NodeKind::Project))
+        .unwrap();
+    tree.insert_with(root, embed("elsewhere", vec![1.0, 0.0]))
+        .unwrap();
+    let hits = tree.search_subtree_ann(empty, &[1.0, 0.0], 4).unwrap();
+    assert!(hits.is_empty());
+    assert_eq!(tree.vector_index_len(), 1);
+}
+
+#[test]
+fn ann_dimension_mismatch_is_an_error() {
+    let mut tree = MemoryTree::ephemeral();
+    let root = tree.root_id();
+    tree.insert_with(root, embed("d2", vec![1.0, 0.0])).unwrap();
+    let err = tree
+        .search_subtree_ann(root, &[1.0, 0.0, 0.0], 1)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        GraniteError::VectorDimensionMismatch {
+            expected: 3,
+            actual: 2
+        }
+    ));
+}
+
+#[test]
+fn ann_skips_non_finite_embeddings() {
+    let mut tree = MemoryTree::ephemeral();
+    let root = tree.root_id();
+    let good = tree
+        .insert_with(root, embed("good", vec![1.0, 0.0]))
+        .unwrap();
+    tree.insert_with(root, embed("nan", vec![f32::NAN, 0.0]))
+        .unwrap();
+    tree.insert_with(root, embed("inf", vec![f32::INFINITY, 0.0]))
+        .unwrap();
+    tree.validate().unwrap();
+    assert_eq!(tree.vector_index_len(), 1);
+    let hits = tree.search_subtree_ann(root, &[1.0, 0.0], 8).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].id, good);
+}
+
+#[test]
+fn ann_equal_distances_break_ties_by_node_id() {
+    let mut tree = MemoryTree::ephemeral();
+    let root = tree.root_id();
+    let a = tree.insert_with(root, embed("a", vec![1.0, 0.0])).unwrap();
+    let b = tree.insert_with(root, embed("b", vec![1.0, 0.0])).unwrap();
+    let hits = tree.search_subtree_ann(root, &[1.0, 0.0], 2).unwrap();
+    assert_eq!(hits.len(), 2);
+    assert!(a < b);
+    assert_eq!(hits[0].id, a);
+    assert_eq!(hits[1].id, b);
+}
+
+#[test]
+fn small_subtree_ann_returns_all_k_hits() {
+    let mut rng = SeedRng::from_seed(7);
+    let mut tree = MemoryTree::ephemeral();
+    let root = tree.root_id();
+    let left = tree
+        .insert_with(root, NodeSpec::new("left").kind(NodeKind::Project))
+        .unwrap();
+    let right = tree
+        .insert_with(root, NodeSpec::new("right").kind(NodeKind::Project))
+        .unwrap();
+    for i in 0..8 {
+        tree.insert_with(left, embed(&format!("l{i}"), rng.vec(8)))
+            .unwrap();
+    }
+    for i in 0..80 {
+        tree.insert_with(right, embed(&format!("r{i}"), rng.vec(8)))
+            .unwrap();
+    }
+    let query = rng.vec(8);
+    let exact = tree
+        .search_subtree(left, &query, 8, DistanceMetric::Cosine)
+        .unwrap();
+    let ann = tree.search_subtree_ann(left, &query, 8).unwrap();
+    assert_eq!(exact.len(), 8);
+    assert_eq!(ann.len(), 8);
+    assert_eq!(
+        ids_of(&ann),
+        ids_of(&exact),
+        "small-subtree ANN must match exact so k results still surface"
+    );
+}
+
+#[test]
+fn missing_root_is_an_error_for_ann() {
+    let tree = MemoryTree::ephemeral();
+    let err = tree
+        .search_subtree_ann(NodeId::from_raw(99), &[1.0], 1)
+        .unwrap_err();
+    assert!(matches!(err, GraniteError::NodeNotFound(_)));
+}
