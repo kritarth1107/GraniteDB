@@ -61,6 +61,66 @@ pub fn l2_norm(v: &[f32]) -> f32 {
     norm_squared(v).sqrt()
 }
 
+/// Query-side state for a subtree scan.
+///
+/// Cosine reuses `||q||` across every candidate so the inner loop only
+/// computes `dot(q, v)` and `||v||`. Other metrics just hold the query.
+#[derive(Clone, Debug)]
+pub struct QueryKernel<'a> {
+    metric: DistanceMetric,
+    query: &'a [f32],
+    query_norm: f32,
+}
+
+impl<'a> QueryKernel<'a> {
+    /// Build a kernel for `query` under `metric`.
+    #[inline]
+    pub fn new(metric: DistanceMetric, query: &'a [f32]) -> Self {
+        Self {
+            metric,
+            query,
+            query_norm: l2_norm(query),
+        }
+    }
+
+    /// Dimension of the query vector.
+    #[inline]
+    pub fn dim(&self) -> usize {
+        self.query.len()
+    }
+
+    /// Distance from the stored query to `embedding`.
+    #[inline]
+    pub fn distance(&self, embedding: &[f32]) -> f32 {
+        debug_assert_eq!(
+            embedding.len(),
+            self.query.len(),
+            "Vector dimensions must match"
+        );
+        match self.metric {
+            DistanceMetric::Cosine => {
+                let denom = (self.query_norm * l2_norm(embedding)).max(COSINE_EPS);
+                1.0 - dot_sum(self.query, embedding) / denom
+            }
+            DistanceMetric::Euclidean => euclidean_distance(self.query, embedding),
+            DistanceMetric::DotProduct => dot_product_distance(self.query, embedding),
+            DistanceMetric::Manhattan => manhattan_distance(self.query, embedding),
+        }
+    }
+}
+
+/// Score every vector in `vectors` against `query`, appending into `out`.
+pub fn scan_distances<'a, I>(metric: DistanceMetric, query: &[f32], vectors: I, out: &mut Vec<f32>)
+where
+    I: IntoIterator<Item = &'a [f32]>,
+{
+    out.clear();
+    let kernel = QueryKernel::new(metric, query);
+    for v in vectors {
+        out.push(kernel.distance(v));
+    }
+}
+
 /// Fused `dot`, `||a||^2`, `||b||^2` in one 8-wide pass.
 #[inline(always)]
 fn cosine_components(a: &[f32], b: &[f32]) -> (f32, f32, f32) {
